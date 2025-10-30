@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Investor Call Notes Processor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Investor Call Notes Processor</h1>
+            <p class="subtitle">Process meeting notes and sync with HubSpot and Notion</p>
+        </header>
+
+        <main>
+            <!-- Input Section -->
+            <section id="input-section" class="section">
+                <div class="form-group">
+                    <label for="notes-input">Paste your meeting notes below:</label>
+                    <textarea
+                        id="notes-input"
+                        placeholder="Paste your investor call notes here...&#10;&#10;Example:&#10;Meeting with John Doe from Acme Capital&#10;Discussed Series A funding round&#10;Interest in our AI technology&#10;Follow up: Send pitch deck by Friday"
+                        rows="15"
+                    ></textarea>
+                </div>
+                <div class="button-group">
+                    <button id="process-btn" class="btn btn-primary">Process Notes</button>
+                </div>
+                <div id="error-message" class="error-message hidden"></div>
+            </section>
+
+            <!-- Loading Section -->
+            <section id="loading-section" class="section hidden">
+                <div class="loader"></div>
+                <p>Processing your notes...</p>
+            </section>
+
+            <!-- Results Section -->
+            <section id="results-section" class="section hidden">
+                <h2>Preview of Changes</h2>
+                <p class="info-text">Please review the extracted information before confirming:</p>
+
+                <div id="results-content" class="results-content">
+
+                    <!-- Section 1: HubSpot Contact -->
+                    <div class="preview-card">
+                        <h3>📋 HubSpot Contact</h3>
+
+                        <!-- Single Contact Match -->
+                        <div id="single-contact" class="contact-section hidden">
+                            <div class="contact-info">
+                                <p><strong>Name:</strong> <span id="contact-name"></span></p>
+                                <p><strong>Email:</strong> <span id="contact-email"></span></p>
+                                <p><strong>Company:</strong> <span id="contact-company"></span></p>
+                            </div>
+                        </div>
+
+                        <!-- Multiple Contact Matches -->
+                        <div id="multiple-contacts" class="contact-section hidden">
+                            <p class="warning-text">⚠️ Multiple contacts found. Please select the correct one:</p>
+                            <select id="contact-select" class="contact-dropdown">
+                                <option value="">Select a contact...</option>
+                            </select>
+                            <div class="contact-options-bottom">
+                                <button id="skip-hubspot-multiple-btn" class="btn-link">Skip HubSpot completely</button>
+                                <button id="search-again-multiple-btn" class="btn-link">None of these - Search again</button>
+                            </div>
+                        </div>
+
+                        <!-- No Contact Match - Options -->
+                        <div id="no-contact" class="contact-section hidden">
+                            <p class="warning-text">⚠️ No matching contact found in HubSpot.</p>
+
+                            <div id="contact-option-cards" class="option-cards">
+                                <div class="option-card" data-option="skip">
+                                    <div class="option-icon">⊘</div>
+                                    <div class="option-title">Skip HubSpot</div>
+                                    <div class="option-desc">Continue without logging to HubSpot (only update Notion)</div>
+                                </div>
+                                <div class="option-card" data-option="search">
+                                    <div class="option-icon">🔍</div>
+                                    <div class="option-title">Search Again</div>
+                                    <div class="option-desc">Enter a different name or email to search</div>
+                                </div>
+                                <div class="option-card" data-option="create">
+                                    <div class="option-icon">➕</div>
+                                    <div class="option-title">Create New Contact</div>
+                                    <div class="option-desc">Add this contact to HubSpot</div>
+                                </div>
+                            </div>
+
+                            <!-- Search Again Form -->
+                            <div id="search-again-form" class="option-form hidden">
+                                <button class="btn-back" id="back-from-search">← Back to options</button>
+                                <h4>Search for a different contact:</h4>
+                                <input type="text" id="search-again-input" placeholder="Enter name or email">
+                                <button id="search-again-btn" class="btn btn-small btn-primary">Search</button>
+                                <span id="search-again-status" class="status-text"></span>
+                            </div>
+
+                            <!-- Create Contact Form -->
+                            <div id="create-contact-form" class="option-form hidden">
+                                <button class="btn-back" id="back-from-create">← Back to options</button>
+                                <h4>Create New Contact:</h4>
+                                <div class="form-row">
+                                    <input type="email" id="new-email" placeholder="Email *" required>
+                                    <input type="text" id="new-firstname" placeholder="First Name *" required>
+                                </div>
+                                <div class="form-row">
+                                    <input type="text" id="new-lastname" placeholder="Last Name *" required>
+                                    <input type="text" id="new-company" placeholder="Company">
+                                </div>
+                                <button id="create-contact-btn" class="btn btn-small btn-primary">Create Contact</button>
+                                <span id="create-contact-status" class="status-text"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section 2: Call Summary -->
+                    <div class="preview-card">
+                        <h3>📝 Call Summary</h3>
+                        <ul id="summary-list" class="summary-bullets">
+                            <!-- Summary bullets will be inserted here -->
+                        </ul>
+                    </div>
+
+                    <!-- Section 3: Investor Preferences -->
+                    <div class="preview-card" id="preferences-card">
+                        <h3>⚙️ Investor Preferences</h3>
+
+                        <!-- Single Investor Found -->
+                        <div id="investor-found" class="investor-section hidden">
+                            <p class="info-text-small">The following preferences will be updated in Notion:</p>
+                            <pre id="preferences-json" class="json-preview"></pre>
+                            <div class="contact-options-bottom">
+                                <button id="search-different-investor-btn" class="btn-link">Search for a different investor</button>
+                            </div>
+                        </div>
+
+                        <!-- Multiple Investors Found -->
+                        <div id="multiple-investors" class="investor-section hidden">
+                            <p class="warning-text">⚠️ Multiple investors found. Please select the correct one:</p>
+                            <select id="investor-select" class="contact-dropdown">
+                                <option value="">Select an investor...</option>
+                            </select>
+                            <div class="contact-options-bottom">
+                                <button id="skip-investor-multiple-btn" class="btn-link">Skip investor preferences</button>
+                                <button id="search-investor-again-multiple-btn" class="btn-link">None of these - Search again</button>
+                            </div>
+                        </div>
+
+                        <!-- Investor Not Found - Options -->
+                        <div id="investor-not-found" class="investor-section hidden">
+                            <p class="warning-text">⚠️ No existing investor found for this company in Notion.</p>
+
+                            <div id="investor-option-cards" class="option-cards">
+                                <div class="option-card" data-option="skip-investor">
+                                    <div class="option-icon">⊘</div>
+                                    <div class="option-title">Skip Investor Preferences</div>
+                                    <div class="option-desc">Only create to-dos, don't update investor preferences</div>
+                                </div>
+                                <div class="option-card" data-option="search-investor">
+                                    <div class="option-icon">🔍</div>
+                                    <div class="option-title">Search Again</div>
+                                    <div class="option-desc">Enter a different company name to search</div>
+                                </div>
+                                <div class="option-card" data-option="create-investor">
+                                    <div class="option-icon">➕</div>
+                                    <div class="option-title">Create New Investor</div>
+                                    <div class="option-desc">Add this investor to Notion with these preferences</div>
+                                </div>
+                            </div>
+
+                            <!-- Search Investor Again Form -->
+                            <div id="search-investor-form" class="option-form hidden">
+                                <button class="btn-back" id="back-from-investor-search">← Back to options</button>
+                                <h4>Search for a different investor:</h4>
+                                <input type="text" id="search-investor-input" placeholder="Enter company name">
+                                <button id="search-investor-btn" class="btn btn-small btn-primary">Search</button>
+                                <span id="search-investor-status" class="status-text"></span>
+                            </div>
+
+                            <!-- Create Investor Confirmation -->
+                            <div id="create-investor-confirm" class="option-form hidden">
+                                <button class="btn-back" id="back-from-investor-create">← Back to options</button>
+                                <h4>Create New Investor</h4>
+                                <p class="info-text-small">Company: <strong id="new-investor-name"></strong></p>
+                                <p class="info-text-small">The following preferences will be added:</p>
+                                <pre id="new-investor-prefs" class="json-preview-small"></pre>
+                                <button id="confirm-investor-create-btn" class="btn btn-small btn-success">Confirm & Create</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Section 4: To-Do Items -->
+                    <div class="preview-card" id="todos-card">
+                        <h3>✅ To-Do Items</h3>
+                        <p class="info-text-small"><span id="todos-count">0</span> action item(s) will be created:</p>
+                        <div class="table-container">
+                            <table id="todos-table" class="todos-table">
+                                <thead>
+                                    <tr>
+                                        <th>Task Name</th>
+                                        <th>Due Date</th>
+                                        <th>Next Step</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="todos-tbody">
+                                    <!-- Todo rows will be inserted here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Skip Warnings -->
+                <div id="skip-warnings" class="skip-warnings hidden">
+                    <div id="skip-hubspot-warning" class="skip-warning hidden">
+                        ⚠️ HubSpot note will NOT be logged
+                    </div>
+                    <div id="skip-investor-warning" class="skip-warning hidden">
+                        ⚠️ Investor preferences will NOT be updated
+                    </div>
+                    <div id="will-execute-info" class="will-execute-info">
+                        <strong>Actions that will be performed:</strong>
+                        <ul id="will-execute-list"></ul>
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button id="confirm-btn" class="btn btn-success">Confirm & Execute</button>
+                    <button id="cancel-btn" class="btn btn-secondary">Cancel</button>
+                </div>
+                <div id="preview-error-message" class="error-message hidden"></div>
+            </section>
+
+            <!-- Success Section -->
+            <section id="success-section" class="section hidden">
+                <div class="success-message">
+                    <svg class="checkmark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 52 52">
+                        <circle class="checkmark-circle" cx="26" cy="26" r="25" fill="none"/>
+                        <path class="checkmark-check" fill="none" d="M14.1 27.2l7.1 7.2 16.7-16.8"/>
+                    </svg>
+                    <h2>Success!</h2>
+                    <div id="success-details" class="success-details">
+                        <!-- Success details will be inserted here -->
+                    </div>
+                    <button id="new-notes-btn" class="btn btn-primary">Process New Notes</button>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>&copy; 2025 Investor Call Notes Processor</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
