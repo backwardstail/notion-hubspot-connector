@@ -3,7 +3,7 @@ import logging
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from hubspot_client import search_hubspot_contact, create_hubspot_contact, log_hubspot_note
+from hubspot_client import search_hubspot_contact, create_hubspot_contact, log_hubspot_note, get_contact_deals
 from notion_client import (
     search_investor_preferences,
     get_page_properties,
@@ -320,27 +320,74 @@ def search_investor():
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
+@app.route('/api/get-deals', methods=['GET'])
+def get_deals():
+    """
+    Get all deals associated with a HubSpot contact
+
+    Query parameters:
+    - contact_id: HubSpot contact ID
+    """
+    try:
+        contact_id = request.args.get('contact_id')
+
+        if not contact_id:
+            return jsonify({'error': 'No contact_id provided'}), 400
+
+        logger.info(f"Fetching deals for contact ID: {contact_id}")
+
+        # Fetch deals from HubSpot
+        deals = get_contact_deals(contact_id, HUBSPOT_API_KEY)
+
+        return jsonify({
+            'success': True,
+            'deals': deals
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching deals: {str(e)}", exc_info=True)
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
 @app.route('/api/confirm-and-execute', methods=['POST'])
 def confirm_and_execute():
     """
-    Confirm and execute all updates to HubSpot and Notion
+    Confirm and execute all updates to HubSpot and Notion with conditional logic
 
-    Steps:
-    1. Log HubSpot note with summary and full notes (if not skipped)
-    2. Search/update/create investor in Notion (if not skipped)
-    3. Create all to-do items in Notion
-    4. Return success summary
+    Supports both old and new payload formats for backward compatibility.
 
-    Request body should include:
-    - contact_id: HubSpot contact ID (optional if skip_hubspot=true)
-    - contact_name: HubSpot contact full name (optional)
-    - raw_notes: Original meeting notes
-    - summary: List of summary bullets
-    - preferences: Investor preferences dict
-    - todos: List of todo items
-    - company_name: Investor/company name
-    - skip_hubspot: Boolean flag to skip HubSpot operations (optional)
-    - skip_investor_prefs: Boolean flag to skip investor preferences (optional)
+    New format:
+    {
+        "hubspot": {
+            "action": "log_only" | "log_with_deal" | "skip",
+            "contact_id": "123",
+            "contact_name": "John Smith",
+            "deal_id": "456" (optional),
+            "summary": ["bullet1", "bullet2"],
+            "raw_notes": "..."
+        },
+        "notion": {
+            "update_investor_prefs": true/false,
+            "create_todos": true/false,
+            "company_name": "Acme Corp",
+            "preferences": {...},
+            "todos": [...]
+        },
+        "contact_name": "..." (for backward compatibility)
+    }
+
+    Old format (still supported):
+    {
+        "contact_id": "123",
+        "contact_name": "John Smith",
+        "raw_notes": "...",
+        "summary": [...],
+        "preferences": {...},
+        "todos": [...],
+        "skip_hubspot": false,
+        "skip_investor_prefs": false,
+        "deal_id": "456"
+    }
     """
     try:
         data = request.get_json()
@@ -348,15 +395,50 @@ def confirm_and_execute():
         if not data:
             return jsonify({'error': 'No data provided'}), 400
 
-        contact_id = data.get('contact_id')
-        contact_name = data.get('contact_name', '')
-        raw_notes = data.get('raw_notes', '')
-        summary = data.get('summary', [])
-        preferences = data.get('preferences', {})
-        todos = data.get('todos', [])
-        company_name = data.get('company_name', '')
-        skip_hubspot = data.get('skip_hubspot', False)
-        skip_investor_prefs = data.get('skip_investor_prefs', False)
+        # Check if new format or old format
+        is_new_format = 'hubspot' in data or 'notion' in data
+
+        # Extract data based on format
+        if is_new_format:
+            # New structured format
+            hubspot_data = data.get('hubspot', {})
+            notion_data = data.get('notion', {})
+
+            hubspot_action = hubspot_data.get('action', 'skip')
+            contact_id = hubspot_data.get('contact_id')
+            contact_name = hubspot_data.get('contact_name', data.get('contact_name', ''))
+            deal_id = hubspot_data.get('deal_id')
+            summary = hubspot_data.get('summary', [])
+            raw_notes = hubspot_data.get('raw_notes', '')
+
+            update_investor_prefs = notion_data.get('update_investor_prefs', False)
+            create_todos = notion_data.get('create_todos', False)
+            company_name = notion_data.get('company_name', '')
+            preferences = notion_data.get('preferences', {})
+            todos = notion_data.get('todos', []) if create_todos else []
+
+            skip_hubspot = (hubspot_action == 'skip')
+            skip_investor_prefs = not update_investor_prefs
+        else:
+            # Old flat format (backward compatibility)
+            contact_id = data.get('contact_id')
+            contact_name = data.get('contact_name', '')
+            raw_notes = data.get('raw_notes', '')
+            summary = data.get('summary', [])
+            preferences = data.get('preferences', {})
+            todos = data.get('todos', [])
+            company_name = data.get('company_name', '')
+            skip_hubspot = data.get('skip_hubspot', False)
+            skip_investor_prefs = data.get('skip_investor_prefs', False)
+            deal_id = data.get('deal_id')
+
+            # Infer hubspot_action from old format
+            if skip_hubspot:
+                hubspot_action = 'skip'
+            elif deal_id:
+                hubspot_action = 'log_with_deal'
+            else:
+                hubspot_action = 'log_only'
 
         # Construct HubSpot contact URL if we have portal ID and contact ID
         hubspot_contact_url = None
@@ -370,47 +452,68 @@ def confirm_and_execute():
         if not skip_hubspot and not contact_id:
             return jsonify({'error': 'No contact_id provided'}), 400
 
-        logger.info(f"Executing updates - HubSpot: {not skip_hubspot}, Investor Prefs: {not skip_investor_prefs}")
+        logger.info(f"Executing updates - HubSpot Action: {hubspot_action}, Investor Prefs: {not skip_investor_prefs}, Create TODOs: {len(todos) > 0}")
 
-        # Track results
+        # Track results with detailed structure
         results = {
-            'hubspot_note': None,
-            'notion_investor': None,
-            'notion_todos': [],
-            'errors': [],
-            'skipped': {
-                'hubspot': skip_hubspot,
-                'investor_prefs': skip_investor_prefs
-            }
+            'hubspot': {
+                'action_taken': None,
+                'note_id': None,
+                'contact_id': contact_id,
+                'contact_name': contact_name,
+                'deal_id': None,
+                'deal_name': None,
+                'error': None
+            },
+            'notion': {
+                'investor_updated': False,
+                'investor_id': None,
+                'investor_action': None,
+                'investor_error': None,
+                'todos_created': 0,
+                'todos': [],
+                'todos_errors': []
+            },
+            'errors': []
         }
 
-        # STEP 1: Log HubSpot note (if not skipped)
-        if not skip_hubspot:
+        # STEP 1: Execute HubSpot action based on user selection
+        if hubspot_action == 'skip':
+            results['hubspot']['action_taken'] = 'skipped'
+            logger.info("Skipping HubSpot note creation per user selection")
+        elif hubspot_action in ['log_only', 'log_with_deal']:
             try:
                 # Format summary for note
                 summary_text = '\n'.join([f'• {bullet}' for bullet in summary])
+
+                # Determine if we should include deal_id
+                note_deal_id = deal_id if hubspot_action == 'log_with_deal' else None
 
                 note_result = log_hubspot_note(
                     contact_id,
                     summary_text,
                     raw_notes,
-                    HUBSPOT_API_KEY
+                    HUBSPOT_API_KEY,
+                    deal_id=note_deal_id
                 )
 
                 if note_result['success']:
-                    results['hubspot_note'] = note_result['data']['id']
-                    logger.info(f"Created HubSpot note: {results['hubspot_note']}")
+                    results['hubspot']['note_id'] = note_result['data']['id']
+                    results['hubspot']['action_taken'] = hubspot_action
+                    results['hubspot']['deal_id'] = note_deal_id
+
+                    logger.info(f"Created HubSpot note: {results['hubspot']['note_id']}, Action: {hubspot_action}, Deal: {note_deal_id}")
                 else:
+                    results['hubspot']['error'] = note_result['error']
                     results['errors'].append(f"HubSpot note failed: {note_result['error']}")
                     logger.error(f"Failed to create HubSpot note: {note_result['error']}")
 
             except Exception as e:
+                results['hubspot']['error'] = str(e)
                 results['errors'].append(f"HubSpot note error: {str(e)}")
                 logger.error(f"Error creating HubSpot note: {str(e)}", exc_info=True)
-        else:
-            logger.info("Skipping HubSpot note creation")
 
-        # STEP 2: Update or create Notion investor preferences (if not skipped)
+        # STEP 2: Update or create Notion investor preferences (conditionally)
         if not skip_investor_prefs and company_name and preferences:
             try:
                 # Search for existing investor
@@ -441,12 +544,12 @@ def confirm_and_execute():
                     )
 
                     if update_result['success']:
-                        results['notion_investor'] = {
-                            'id': investor_page_id,
-                            'action': 'updated'
-                        }
-                        logger.info(f"Updated investor preferences")
+                        results['notion']['investor_updated'] = True
+                        results['notion']['investor_id'] = investor_page_id
+                        results['notion']['investor_action'] = 'updated'
+                        logger.info(f"Updated investor preferences for {company_name}")
                     else:
+                        results['notion']['investor_error'] = update_result['error']
                         results['errors'].append(f"Notion update failed: {update_result['error']}")
 
                 else:
@@ -471,58 +574,78 @@ def confirm_and_execute():
                     )
 
                     if create_result['success']:
-                        results['notion_investor'] = {
-                            'id': create_result['data']['id'],
-                            'action': 'created'
-                        }
-                        logger.info(f"Created new investor page: {results['notion_investor']['id']}")
+                        results['notion']['investor_updated'] = True
+                        results['notion']['investor_id'] = create_result['data']['id']
+                        results['notion']['investor_action'] = 'created'
+                        logger.info(f"Created new investor page: {results['notion']['investor_id']}")
                     else:
+                        results['notion']['investor_error'] = create_result['error']
                         results['errors'].append(f"Notion create failed: {create_result['error']}")
 
             except Exception as e:
+                results['notion']['investor_error'] = str(e)
                 results['errors'].append(f"Notion investor error: {str(e)}")
                 logger.error(f"Error with Notion investor: {str(e)}", exc_info=True)
+        else:
+            if skip_investor_prefs:
+                logger.info("Skipping investor preferences update per user selection")
 
-        # STEP 3: Create to-do items
-        for todo in todos:
-            try:
-                task_name = todo.get('task_name', '')
-                due_date = todo.get('due_date', '')
-                next_step = todo.get('next_step', '')
+        # STEP 3: Create to-do items (conditionally based on user selection)
+        if len(todos) > 0:
+            logger.info(f"Creating {len(todos)} to-do items")
+            for todo in todos:
+                try:
+                    task_name = todo.get('task_name', '')
+                    due_date = todo.get('due_date', '')
+                    next_step = todo.get('next_step', '')
 
-                if not task_name:
-                    continue
+                    if not task_name:
+                        continue
 
-                todo_result = create_todo_item(
-                    task_name,
-                    due_date,
-                    next_step,
-                    NOTION_TODOS_DB_ID,
-                    NOTION_API_KEY
-                )
+                    todo_result = create_todo_item(
+                        task_name,
+                        due_date,
+                        next_step,
+                        NOTION_TODOS_DB_ID,
+                        NOTION_API_KEY
+                    )
 
-                if todo_result['success']:
-                    results['notion_todos'].append({
-                        'id': todo_result['data']['id'],
-                        'task_name': task_name
-                    })
-                    logger.info(f"Created todo: {task_name}")
-                else:
-                    results['errors'].append(f"Todo creation failed for '{task_name}': {todo_result['error']}")
+                    if todo_result['success']:
+                        results['notion']['todos'].append({
+                            'id': todo_result['data']['id'],
+                            'task_name': task_name,
+                            'due_date': due_date
+                        })
+                        results['notion']['todos_created'] += 1
+                        logger.info(f"Created todo: {task_name}")
+                    else:
+                        error_msg = f"Failed to create todo '{task_name}': {todo_result['error']}"
+                        results['notion']['todos_errors'].append(error_msg)
+                        results['errors'].append(error_msg)
 
-            except Exception as e:
-                results['errors'].append(f"Todo error: {str(e)}")
-                logger.error(f"Error creating todo: {str(e)}", exc_info=True)
+                except Exception as e:
+                    error_msg = f"Todo error for '{task_name}': {str(e)}"
+                    results['notion']['todos_errors'].append(error_msg)
+                    results['errors'].append(error_msg)
+                    logger.error(f"Error creating todo: {str(e)}", exc_info=True)
+        else:
+            logger.info("No to-dos to create (skipped by user or none provided)")
 
-        # Build response
-        success = len(results['errors']) == 0
-        partial_success = (results['hubspot_note'] or results['notion_investor'] or results['notion_todos']) and results['errors']
+        # Build response with detailed execution summary
+        # Determine overall success status
+        has_any_success = (
+            results['hubspot']['note_id'] or
+            results['notion']['investor_updated'] or
+            results['notion']['todos_created'] > 0
+        )
+        success = len(results['errors']) == 0 and has_any_success
+        partial_success = has_any_success and len(results['errors']) > 0
 
         response = {
             'success': success,
             'partial_success': partial_success,
             'results': results,
-            'message': build_success_message(results)
+            'summary': build_execution_summary(results)
         }
 
         return jsonify(response), 200
@@ -635,6 +758,85 @@ def build_success_message(results):
         return "No actions completed"
 
     return " | ".join(messages)
+
+
+def build_execution_summary(results):
+    """
+    Build a detailed execution summary with new results format
+
+    Args:
+        results (dict): Results from confirm-and-execute with new structure
+
+    Returns:
+        dict: Execution summary with detailed breakdown
+    """
+    summary = {
+        'hubspot': {},
+        'notion': {},
+        'messages': []
+    }
+
+    # HubSpot summary
+    hubspot = results.get('hubspot', {})
+    if hubspot.get('action_taken') == 'skipped':
+        summary['hubspot']['status'] = 'skipped'
+        summary['hubspot']['message'] = 'HubSpot note was not created'
+        summary['messages'].append('⊘ HubSpot note skipped')
+    elif hubspot.get('note_id'):
+        summary['hubspot']['status'] = 'success'
+        summary['hubspot']['note_id'] = hubspot['note_id']
+        summary['hubspot']['contact_name'] = hubspot.get('contact_name', 'Unknown')
+
+        if hubspot.get('action_taken') == 'log_with_deal' and hubspot.get('deal_id'):
+            summary['hubspot']['message'] = f"Note created for {hubspot.get('contact_name')} and associated with deal"
+            summary['hubspot']['deal_id'] = hubspot['deal_id']
+            summary['messages'].append(f"✓ HubSpot note created and associated with deal")
+        else:
+            summary['hubspot']['message'] = f"Note created for {hubspot.get('contact_name')}"
+            summary['messages'].append(f"✓ HubSpot note created")
+    elif hubspot.get('error'):
+        summary['hubspot']['status'] = 'error'
+        summary['hubspot']['error'] = hubspot['error']
+        summary['messages'].append(f"✗ HubSpot note failed")
+
+    # Notion Investor summary
+    notion = results.get('notion', {})
+    if notion.get('investor_updated'):
+        summary['notion']['investor_status'] = 'success'
+        summary['notion']['investor_action'] = notion.get('investor_action', 'updated')
+        summary['notion']['investor_id'] = notion.get('investor_id')
+        action_text = notion.get('investor_action', 'updated')
+        summary['messages'].append(f"✓ Investor preferences {action_text}")
+    elif notion.get('investor_error'):
+        summary['notion']['investor_status'] = 'error'
+        summary['notion']['investor_error'] = notion['investor_error']
+        summary['messages'].append(f"✗ Investor preferences failed")
+    else:
+        summary['notion']['investor_status'] = 'skipped'
+        summary['messages'].append('⊘ Investor preferences skipped')
+
+    # Notion TODOs summary
+    todos_created = notion.get('todos_created', 0)
+    if todos_created > 0:
+        summary['notion']['todos_status'] = 'success'
+        summary['notion']['todos_created'] = todos_created
+        summary['messages'].append(f"✓ Created {todos_created} to-do item{'s' if todos_created > 1 else ''}")
+    elif len(notion.get('todos_errors', [])) > 0:
+        summary['notion']['todos_status'] = 'partial'
+        summary['notion']['todos_created'] = todos_created
+        summary['notion']['todos_errors'] = len(notion['todos_errors'])
+        summary['messages'].append(f"⚠ Created {todos_created} to-do(s) with {len(notion['todos_errors'])} error(s)")
+    else:
+        summary['notion']['todos_status'] = 'skipped'
+        summary['messages'].append('⊘ No to-do items created')
+
+    # Overall errors
+    if results.get('errors'):
+        summary['has_errors'] = True
+        summary['error_count'] = len(results['errors'])
+        summary['errors'] = results['errors']
+
+    return summary
 
 
 if __name__ == '__main__':

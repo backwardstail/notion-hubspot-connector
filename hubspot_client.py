@@ -284,15 +284,16 @@ def create_hubspot_contact(email, firstname, lastname, company, api_key):
         }
 
 
-def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key):
+def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key, deal_id=None):
     """
-    Log a note to a HubSpot contact
+    Log a note to a HubSpot contact, optionally associating it with a deal
 
     Args:
         contact_id (str): HubSpot contact ID
         summary_html (str): Summary text (will be converted to HTML with bullets)
         full_notes_html (str): Full notes text (will be converted to HTML)
         api_key (str): HubSpot API key
+        deal_id (str, optional): HubSpot deal ID to associate the note with. Defaults to None.
 
     Returns:
         dict: {
@@ -324,27 +325,48 @@ def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key):
         # Get current timestamp in UTC milliseconds
         timestamp = int(datetime.utcnow().timestamp() * 1000)
 
+        # Build associations list - always include contact
+        associations = [
+            {
+                "to": {
+                    "id": contact_id
+                },
+                "types": [
+                    {
+                        "associationCategory": "HUBSPOT_DEFINED",
+                        "associationTypeId": 202  # Note to Contact association
+                    }
+                ]
+            }
+        ]
+
+        # Add deal association if deal_id is provided
+        if deal_id:
+            associations.append({
+                "to": {
+                    "id": deal_id
+                },
+                "types": [
+                    {
+                        "associationCategory": "HUBSPOT_DEFINED",
+                        "associationTypeId": 214  # Note to Deal association
+                    }
+                ]
+            })
+
         payload = {
             "properties": {
                 "hs_note_body": note_body,
                 "hs_timestamp": timestamp
             },
-            "associations": [
-                {
-                    "to": {
-                        "id": contact_id
-                    },
-                    "types": [
-                        {
-                            "associationCategory": "HUBSPOT_DEFINED",
-                            "associationTypeId": 202  # Note to Contact association
-                        }
-                    ]
-                }
-            ]
+            "associations": associations
         }
 
-        logger.info(f"Creating note for contact ID: {contact_id}")
+        log_msg = f"Creating note for contact ID: {contact_id}"
+        if deal_id:
+            log_msg += f" and deal ID: {deal_id}"
+        logger.info(log_msg)
+
         response = requests.post(url, json=payload, headers=headers)
 
         if response.status_code == 201:
@@ -372,3 +394,79 @@ def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key):
             'success': False,
             'error': error_msg
         }
+
+
+def get_contact_deals(contact_id, api_key):
+    """
+    Get all deals associated with a HubSpot contact
+
+    Args:
+        contact_id (str): HubSpot contact ID
+        api_key (str): HubSpot API key
+
+    Returns:
+        list: List of deal dicts with format:
+            [{"id": "123", "name": "Acme Series A", "amount": "5000000", "stage": "negotiation"}]
+            Returns empty list if contact has no deals or if an error occurs
+    """
+    try:
+        # Step 1: Get associated deal IDs
+        associations_url = f"{HUBSPOT_API_BASE}/crm/v3/objects/contacts/{contact_id}/associations/deals"
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+
+        logger.info(f"Fetching deal associations for contact ID: {contact_id}")
+        associations_response = requests.get(associations_url, headers=headers)
+
+        if associations_response.status_code == 404:
+            logger.info(f"Contact {contact_id} not found")
+            return []
+        elif associations_response.status_code != 200:
+            logger.error(f"Error fetching associations: {associations_response.status_code} - {associations_response.text}")
+            return []
+
+        associations_data = associations_response.json()
+        associated_deals = associations_data.get('results', [])
+
+        if not associated_deals:
+            logger.info(f"No deals found for contact ID: {contact_id}")
+            return []
+
+        # Step 2: Fetch details for each deal
+        deals = []
+        for deal_association in associated_deals:
+            deal_id = deal_association.get('id')
+            if not deal_id:
+                continue
+
+            # Fetch deal details with specific properties
+            deal_url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/{deal_id}"
+            params = {
+                'properties': 'dealname,amount,dealstage'
+            }
+
+            logger.info(f"Fetching details for deal ID: {deal_id}")
+            deal_response = requests.get(deal_url, headers=headers, params=params)
+
+            if deal_response.status_code == 200:
+                deal_data = deal_response.json()
+                properties = deal_data.get('properties', {})
+
+                deals.append({
+                    'id': deal_id,
+                    'name': properties.get('dealname', ''),
+                    'amount': properties.get('amount', ''),
+                    'stage': properties.get('dealstage', '')
+                })
+                logger.info(f"Successfully fetched deal: {properties.get('dealname', 'Unnamed')}")
+            else:
+                logger.warning(f"Failed to fetch deal {deal_id}: {deal_response.status_code}")
+
+        logger.info(f"Found {len(deals)} deal(s) for contact {contact_id}")
+        return deals
+
+    except Exception as e:
+        logger.error(f"Error fetching contact deals: {str(e)}", exc_info=True)
+        return []

@@ -16,12 +16,14 @@ All through a simple web interface with preview and confirmation workflow.
 
 ✅ **AI-Powered Parsing** - Claude Sonnet 4.5 extracts contact info, preferences, and action items
 ✅ **HubSpot Integration** - Search contacts, create new ones, log detailed notes
+✅ **Deal Association** - Associate notes with specific deals in HubSpot pipeline (NEW)
+✅ **Flexible Action Selection** - Choose which actions to perform (HubSpot, Notion, or both)
 ✅ **Notion Data Sources API** - Update investor preferences and create todos using Notion API v2025-09-03
 ✅ **Smart Contact Matching** - Try email first, then name, with multiple match selection
-✅ **Preview Workflow** - Review all changes before applying
+✅ **Preview Workflow** - Review all changes before applying with execution summary
 ✅ **Append-Only Updates** - Multi-select values are merged, notes are appended
-✅ **Validation** - Dropdown values validated against allowed options
-✅ **Error Handling** - Partial success tracking, detailed error messages
+✅ **Validation** - Comprehensive validation prevents incomplete submissions
+✅ **Error Handling** - Partial success tracking, detailed error messages, independent action execution
 
 ## Prerequisites
 
@@ -172,29 +174,41 @@ If any environment variables are missing, warnings will appear in the console.
    **📋 HubSpot Contact**
    - If 1 match: Auto-selected contact info
    - If multiple: Dropdown to select correct contact
-   - If none: Form to create new contact
+   - If none: Form to create new contact or skip HubSpot
+
+   **🎯 HubSpot Actions** (choose one)
+   - **Log call note only** - Create note on contact record
+   - **Log call note + Associate with deal** - Create note AND link to a specific deal
+   - **Skip HubSpot entirely** - Only update Notion
+
+   **Deal Selection** (if "Associate with deal" is selected)
+   - Dropdown shows all deals for the contact: "Deal Name - $Amount - Stage"
+   - If no deals found: Suggestion to use "Log call note only" instead
 
    **📝 Call Summary**
    - Bulleted summary with [TO-DO] items highlighted
 
-   **⚙️ Investor Preferences** (if any)
-   - JSON preview of values to update in Notion
+   **📓 Notion Actions** (select which to perform)
+   - ☑ **Update investor preferences** - Merge preferences into Notion database
+   - ☑ **Create to-do items** - Add action items to Notion TODOs
 
-   **✅ To-Do Items** (if any)
-   - Table showing task, due date, next step
+   **📋 Summary of Actions**
+   - Final summary showing exactly what will be executed
+   - Color-coded: Green for actions, Yellow for skipped items
 
 4. **Confirm & Execute**
-   Click the green button to:
-   - Log HubSpot note with summary and full notes
-   - Update/create investor in Notion (append-only)
-   - Create all to-do items in Notion
+   Click the green button to execute selected actions:
+   - Show progress indicators for each step
+   - Execute actions independently (failures don't block other actions)
+   - Display real-time progress: "Logging to HubSpot...", "Updating Notion..."
 
 5. **View Results**
-   Success screen shows:
-   - ✓ HubSpot note logged
-   - ✓ Investor preferences created/updated
-   - ✓ N to-do item(s) created
-   - ⚠️ Any errors encountered
+   Success screen shows detailed results:
+   - ✓ HubSpot note created for **John Smith** and associated with deal
+   - ✓ Investor preferences updated
+   - ✓ Created **3** to-do items
+   - ⊘ Actions that were skipped
+   - ⚠️ Any errors with specific guidance
 
 ## Allowed Dropdown Values
 
@@ -335,6 +349,22 @@ notion_hubspot_connector/
   - `crm.objects.contacts.read`
   - `crm.objects.contacts.write`
   - `crm.objects.notes.write`
+  - `crm.objects.deals.read` (for deal association feature)
+
+**Issue: "No deals found for this contact"**
+- This is expected if the contact has no associated deals
+- Solution: Select "Log call note only" instead of "Log with deal"
+- Or create a deal in HubSpot first, then process the notes
+
+**Issue: "Unable to load deals"**
+- Check network connection
+- Verify HubSpot API key has `crm.objects.deals.read` permission
+- The note can still be logged without deal association
+
+**Issue: Cannot submit with "log_with_deal" selected**
+- You must select a deal from the dropdown
+- If dropdown is empty or disabled, change action to "Log call note only"
+- Validation prevents incomplete submissions
 
 ### Claude API Errors
 

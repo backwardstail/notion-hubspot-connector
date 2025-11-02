@@ -5,6 +5,10 @@ let selectedContactName = null;
 let skipHubspot = false;
 let skipInvestorPrefs = false;
 let investorPageId = null;
+let selectedInvestorId = null;
+let selectedInvestorName = null;
+let selectedDealId = null;
+let hubspotAction = 'log_only'; // 'log_only', 'log_with_deal', or 'skip'
 
 // DOM elements - Input Section
 const notesInput = document.getElementById('notes-input');
@@ -15,6 +19,9 @@ const errorMessage = document.getElementById('error-message');
 const inputSection = document.getElementById('input-section');
 const loadingSection = document.getElementById('loading-section');
 const resultsSection = document.getElementById('results-section');
+const executionLoadingSection = document.getElementById('execution-loading-section');
+const executionStatusMessage = document.getElementById('execution-status-message');
+const progressSteps = document.getElementById('progress-steps');
 const successSection = document.getElementById('success-section');
 
 // DOM elements - Contact Selection
@@ -58,13 +65,31 @@ const skipHubspotWarning = document.getElementById('skip-hubspot-warning');
 const skipInvestorWarning = document.getElementById('skip-investor-warning');
 const willExecuteList = document.getElementById('will-execute-list');
 
+// DOM elements - Execution Summary
+const executionSummaryList = document.getElementById('execution-summary-list');
+
 // DOM elements - Preview Content
 const summaryList = document.getElementById('summary-list');
 const preferencesJson = document.getElementById('preferences-json');
 const todosTbody = document.getElementById('todos-tbody');
-const todosCount = document.getElementById('todos-count');
-const preferencesCard = document.getElementById('preferences-card');
-const todosCard = document.getElementById('todos-card');
+const todosCountInline = document.getElementById('todos-count-inline');
+const notionActionsCard = document.getElementById('notion-actions-card');
+
+// DOM elements - HubSpot Actions
+const hubspotActionsCard = document.getElementById('hubspot-actions-card');
+const selectedContactNameDisplay = document.getElementById('selected-contact-name-display');
+const hubspotActionRadios = document.querySelectorAll('input[name="hubspot-action"]');
+const dealSelection = document.getElementById('deal-selection');
+const dealDropdown = document.getElementById('deal-dropdown');
+const dealSelectionStatus = document.getElementById('deal-selection-status');
+
+// DOM elements - Notion Checkboxes
+const updateInvestorPrefsCheckbox = document.getElementById('update-investor-prefs');
+const createTodosCheckbox = document.getElementById('create-todos');
+const investorPreviewContainer = document.getElementById('investor-preview-container');
+const todosPreviewContainer = document.getElementById('todos-preview-container');
+const investorSkipWarning = document.getElementById('investor-skip-warning');
+const todosSkipWarning = document.getElementById('todos-skip-warning');
 
 // DOM elements - Actions
 const confirmBtn = document.getElementById('confirm-btn');
@@ -110,6 +135,18 @@ notesInput.addEventListener('keydown', (e) => {
         handleProcessNotes();
     }
 });
+
+// HubSpot action radio button event listeners
+hubspotActionRadios.forEach(radio => {
+    radio.addEventListener('change', handleHubSpotActionChange);
+});
+
+// Deal dropdown event listener
+dealDropdown.addEventListener('change', handleDealSelection);
+
+// Notion checkbox event listeners
+updateInvestorPrefsCheckbox.addEventListener('change', handleInvestorPrefsCheckboxChange);
+createTodosCheckbox.addEventListener('change', handleTodosCheckboxChange);
 
 /**
  * Handle processing of notes
@@ -167,6 +204,26 @@ function displayPreview(preview) {
     skipHubspot = false;
     skipInvestorPrefs = false;
     investorPageId = null;
+    selectedDealId = null;
+    hubspotAction = 'log_only';
+
+    // Reset HubSpot actions UI
+    hubspotActionsCard.classList.add('hidden');
+    dealSelection.classList.add('hidden');
+    // Reset radio to "log_only"
+    document.querySelector('input[name="hubspot-action"][value="log_only"]').checked = true;
+
+    // Reset Notion checkboxes to checked (default state)
+    if (updateInvestorPrefsCheckbox) {
+        updateInvestorPrefsCheckbox.checked = true;
+        investorPreviewContainer.classList.remove('disabled');
+        investorSkipWarning.classList.add('hidden');
+    }
+    if (createTodosCheckbox) {
+        createTodosCheckbox.checked = true;
+        todosPreviewContainer.classList.remove('disabled');
+        todosSkipWarning.classList.add('hidden');
+    }
 
     // Handle HubSpot contact display
     displayContactSection(preview);
@@ -181,7 +238,7 @@ function displayPreview(preview) {
     displayTodos(preview.todos || []);
 
     // Update skip warnings (initially hidden)
-    updateSkipWarnings();
+    updateExecutionSummary();
 
     // Show results section
     showResults();
@@ -209,6 +266,9 @@ function displayContactSection(preview) {
         selectedContactId = contact.id;
         selectedContactName = fullName;
         singleContactDiv.classList.remove('hidden');
+
+        // Show HubSpot actions card for single contact
+        showHubSpotActionsCard();
 
     } else if (contacts.length > 1) {
         // Multiple contact matches
@@ -267,7 +327,7 @@ function displayPreferences(preview) {
     const preferences = preview.preferences || {};
     const notionInvestor = preview.notion_investor;
 
-    // Check if there are any preferences
+    // Check if there are any meaningful preferences
     const hasPreferences = Object.keys(preferences).some(key => {
         const value = preferences[key];
         if (key === 'Preference Notes') {
@@ -276,17 +336,22 @@ function displayPreferences(preview) {
         return Array.isArray(value) && value.length > 0;
     });
 
-    if (!hasPreferences) {
-        preferencesCard.classList.add('hidden');
-        return;
-    }
-
-    preferencesCard.classList.remove('hidden');
-
     // Hide all sections first
     investorFound.classList.add('hidden');
     multipleInvestorsDiv.classList.add('hidden');
     investorNotFound.classList.add('hidden');
+
+    // If there are no meaningful preferences, skip showing investor section entirely
+    if (!hasPreferences) {
+        // Automatically uncheck the investor preferences checkbox
+        if (updateInvestorPrefsCheckbox) {
+            updateInvestorPrefsCheckbox.checked = false;
+            investorPreviewContainer.classList.add('disabled');
+            investorSkipWarning.classList.remove('hidden');
+        }
+        skipInvestorPrefs = true;
+        return;
+    }
 
     if (notionInvestor && notionInvestor.found) {
         // Investor found in Notion
@@ -328,14 +393,13 @@ function displayPreferences(preview) {
  */
 function displayTodos(todos) {
     todosTbody.innerHTML = '';
-    todosCount.textContent = todos.length;
+    todosCountInline.textContent = todos.length;
 
     if (todos.length === 0) {
-        todosCard.classList.add('hidden');
+        // Hide the Notion Actions card if no todos
+        // But only if there are also no preferences
         return;
     }
-
-    todosCard.classList.remove('hidden');
 
     todos.forEach(todo => {
         const tr = document.createElement('tr');
@@ -373,6 +437,11 @@ function handleContactSelection(e) {
     }
 
     console.log('Contact selected:', selectedContactId, selectedContactName);
+
+    // Show HubSpot actions card when contact is selected
+    if (selectedContactId) {
+        showHubSpotActionsCard();
+    }
 }
 
 /**
@@ -433,7 +502,10 @@ async function handleCreateContact() {
             document.getElementById('create-contact-status').style.color = '#10b981';
 
             hidePreviewError();
-            updateSkipWarnings();
+            updateExecutionSummary();
+
+            // Show HubSpot actions card
+            showHubSpotActionsCard();
         } else {
             // New contact created successfully
             selectedContactName = `${firstname} ${lastname}`;
@@ -460,7 +532,10 @@ async function handleCreateContact() {
             noContactDiv.appendChild(contactInfo);
 
             hidePreviewError();
-            updateSkipWarnings();
+            updateExecutionSummary();
+
+            // Show HubSpot actions card
+            showHubSpotActionsCard();
         }
 
     } catch (error) {
@@ -589,7 +664,10 @@ async function handleSearchAgain() {
             document.getElementById('search-again-status').textContent = `✓ Found: ${selectedContactName}`;
             document.getElementById('search-again-status').style.color = '#10b981';
 
-            updateSkipWarnings();
+            updateExecutionSummary();
+
+            // Show HubSpot actions card
+            showHubSpotActionsCard();
         } else {
             // Multiple matches - populate dropdown
             // Clear previous displays
@@ -632,7 +710,7 @@ async function handleSearchAgain() {
 function handleSkipHubspot() {
     skipHubspot = true;
     selectedContactId = null;
-    updateSkipWarnings();
+    updateExecutionSummary();
 
     // Show confirmation in the no-contact section
     const skipConfirmation = document.createElement('div');
@@ -804,7 +882,7 @@ async function handleSearchInvestor() {
             document.getElementById('search-investor-status').textContent = `✓ Found: ${investorName}`;
             document.getElementById('search-investor-status').style.color = '#10b981';
 
-            updateSkipWarnings();
+            updateExecutionSummary();
         } else {
             // Multiple investors found
             // Clear all investor sections AND forms first
@@ -856,7 +934,7 @@ function handleInvestorSelection(e) {
         console.log('Investor selected:', investorPageId, selectedOption.textContent);
     }
 
-    updateSkipWarnings();
+    updateExecutionSummary();
 }
 
 /**
@@ -903,7 +981,7 @@ function showSearchDifferentInvestor() {
 function handleSkipInvestorPrefs() {
     skipInvestorPrefs = true;
     investorPageId = null;
-    updateSkipWarnings();
+    updateExecutionSummary();
 
     // Show confirmation
     const skipConfirmation = document.createElement('div');
@@ -952,52 +1030,256 @@ async function handleCreateInvestor() {
 
     preferencesJson.textContent = JSON.stringify(preferences || {}, null, 2);
 
-    updateSkipWarnings();
+    updateExecutionSummary();
 }
 
 /**
- * Update skip warnings display
+ * Show HubSpot Actions card
  */
-function updateSkipWarnings() {
-    // Show/hide skip warnings
-    if (skipHubspot || skipInvestorPrefs) {
-        skipWarnings.classList.remove('hidden');
+function showHubSpotActionsCard() {
+    if (!selectedContactId || !selectedContactName) {
+        hubspotActionsCard.classList.add('hidden');
+        return;
+    }
 
-        // Update individual warnings
-        if (skipHubspot) {
-            skipHubspotWarning.classList.remove('hidden');
-        } else {
-            skipHubspotWarning.classList.add('hidden');
-        }
+    // Update contact name display
+    selectedContactNameDisplay.textContent = selectedContactName;
 
-        if (skipInvestorPrefs) {
-            skipInvestorWarning.classList.remove('hidden');
-        } else {
-            skipInvestorWarning.classList.add('hidden');
-        }
+    // Show the card
+    hubspotActionsCard.classList.remove('hidden');
 
-        // Update "will execute" list
-        willExecuteList.innerHTML = '';
+    // Reset to default action
+    hubspotAction = 'log_only';
+    document.querySelector('input[name="hubspot-action"][value="log_only"]').checked = true;
+    dealSelection.classList.add('hidden');
+    selectedDealId = null;
 
-        if (!skipHubspot) {
-            const li = document.createElement('li');
-            li.textContent = 'Log call notes in HubSpot';
-            willExecuteList.appendChild(li);
-        }
+    // Update skip warnings
+    skipHubspot = false;
+    updateExecutionSummary();
+}
 
-        if (!skipInvestorPrefs && (processedData?.preferences && Object.keys(processedData.preferences).length > 0)) {
-            const li = document.createElement('li');
-            li.textContent = 'Update investor preferences in Notion';
-            willExecuteList.appendChild(li);
-        }
+/**
+ * Handle HubSpot action radio button change
+ */
+async function handleHubSpotActionChange(e) {
+    hubspotAction = e.target.value;
+    console.log('HubSpot action changed to:', hubspotAction);
 
-        if (processedData?.todos && processedData.todos.length > 0) {
-            const li = document.createElement('li');
-            li.textContent = `Create ${processedData.todos.length} to-do item(s) in Notion`;
-            willExecuteList.appendChild(li);
-        }
+    if (hubspotAction === 'log_with_deal') {
+        // Show deal selection and fetch deals
+        dealSelection.classList.remove('hidden');
+        dealDropdown.innerHTML = '<option value="">Loading deals...</option>';
+        dealDropdown.disabled = true;
+        dealSelectionStatus.textContent = '';
+        dealSelectionStatus.className = 'deal-status';
 
+        // Fetch deals for this contact
+        await fetchDealsForContact(selectedContactId);
+
+        skipHubspot = false;
+    } else if (hubspotAction === 'skip') {
+        // Hide deal selection and set skip flag
+        dealSelection.classList.add('hidden');
+        selectedDealId = null;
+        skipHubspot = true;
     } else {
+        // log_only: Hide deal selection
+        dealSelection.classList.add('hidden');
+        selectedDealId = null;
+        skipHubspot = false;
+    }
+
+    updateExecutionSummary();
+}
+
+/**
+ * Fetch deals for a contact
+ */
+async function fetchDealsForContact(contactId) {
+    try {
+        const response = await fetch(`/api/get-deals?contact_id=${contactId}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to fetch deals');
+        }
+
+        const deals = data.deals || [];
+
+        // Populate dropdown
+        dealDropdown.innerHTML = '';
+
+        if (deals.length === 0) {
+            dealDropdown.innerHTML = '<option value="">No deals found for this contact</option>';
+            dealSelectionStatus.textContent = '⚠️ No deals found. You can still log the note without deal association by selecting "Log call note only".';
+            dealSelectionStatus.className = 'deal-status warning';
+            dealDropdown.disabled = true;
+        } else {
+            dealDropdown.innerHTML = '<option value="">Select a deal...</option>';
+            deals.forEach(deal => {
+                const option = document.createElement('option');
+                option.value = deal.id;
+                // Format: "Deal Name - $Amount - Stage"
+                const amount = deal.amount ? `$${parseFloat(deal.amount).toLocaleString()}` : '$0';
+                const stage = deal.stage || 'Unknown';
+                option.textContent = `${deal.name || 'Unnamed Deal'} - ${amount} - ${stage}`;
+                dealDropdown.appendChild(option);
+            });
+            dealSelectionStatus.textContent = `✓ Found ${deals.length} deal(s)`;
+            dealSelectionStatus.className = 'deal-status success';
+            dealDropdown.disabled = false;
+        }
+
+    } catch (error) {
+        console.error('Error fetching deals:', error);
+        dealDropdown.innerHTML = '<option value="">Unable to load deals</option>';
+        dealSelectionStatus.textContent = `⚠️ Unable to load deals. You can still log the note without deal association by selecting "Log call note only".`;
+        dealSelectionStatus.className = 'deal-status warning';
+        dealDropdown.disabled = true;
+    }
+}
+
+/**
+ * Handle deal selection from dropdown
+ */
+function handleDealSelection(e) {
+    selectedDealId = e.target.value;
+    console.log('Deal selected:', selectedDealId);
+    updateExecutionSummary();
+}
+
+/**
+ * Handle investor preferences checkbox change
+ */
+function handleInvestorPrefsCheckboxChange(e) {
+    const isChecked = e.target.checked;
+    console.log('Update investor prefs:', isChecked);
+
+    if (isChecked) {
+        // Enable investor preferences
+        investorPreviewContainer.classList.remove('disabled');
+        investorSkipWarning.classList.add('hidden');
+        skipInvestorPrefs = false;
+    } else {
+        // Disable investor preferences
+        investorPreviewContainer.classList.add('disabled');
+        investorSkipWarning.classList.remove('hidden');
+        skipInvestorPrefs = true;
+    }
+
+    updateExecutionSummary();
+}
+
+/**
+ * Handle todos checkbox change
+ */
+function handleTodosCheckboxChange(e) {
+    const isChecked = e.target.checked;
+    console.log('Create todos:', isChecked);
+
+    if (isChecked) {
+        // Enable todos
+        todosPreviewContainer.classList.remove('disabled');
+        todosSkipWarning.classList.add('hidden');
+    } else {
+        // Disable todos
+        todosPreviewContainer.classList.add('disabled');
+        todosSkipWarning.classList.remove('hidden');
+    }
+
+    updateExecutionSummary();
+}
+
+/**
+ * Update execution summary display
+ */
+function updateExecutionSummary() {
+    if (!executionSummaryList) return;
+
+    // Clear existing summary
+    executionSummaryList.innerHTML = '';
+
+    // 1. HubSpot Action Summary
+    const hubspotAction = document.querySelector('input[name="hubspot-action"]:checked')?.value;
+
+    if (hubspotAction === 'skip' || skipHubspot) {
+        // HubSpot will be skipped
+        const li = document.createElement('li');
+        li.className = 'warning';
+        li.innerHTML = 'HubSpot will be skipped';
+        executionSummaryList.appendChild(li);
+    } else if (selectedContactName && selectedContactId) {
+        // HubSpot contact selected
+        if (hubspotAction === 'log_with_deal') {
+            // Log with deal
+            const selectedDeal = dealDropdown?.options[dealDropdown.selectedIndex];
+            if (selectedDeal && selectedDeal.value) {
+                const li = document.createElement('li');
+                li.className = 'success';
+                li.innerHTML = `Will log call note to <strong>${selectedContactName}</strong> and associate with deal: <strong>${selectedDeal.text}</strong>`;
+                executionSummaryList.appendChild(li);
+            } else {
+                const li = document.createElement('li');
+                li.className = 'success';
+                li.innerHTML = `Will log call note to <strong>${selectedContactName}</strong> (select a deal above)`;
+                executionSummaryList.appendChild(li);
+            }
+        } else {
+            // Log only
+            const li = document.createElement('li');
+            li.className = 'success';
+            li.innerHTML = `Will log call note to <strong>${selectedContactName}</strong>`;
+            executionSummaryList.appendChild(li);
+        }
+    } else if (!skipHubspot) {
+        // No contact selected yet
+        const li = document.createElement('li');
+        li.className = 'warning';
+        li.innerHTML = 'HubSpot contact not yet selected';
+        executionSummaryList.appendChild(li);
+    }
+
+    // 2. Investor Preferences Summary
+    const shouldUpdateInvestorPrefs = updateInvestorPrefsCheckbox && updateInvestorPrefsCheckbox.checked;
+
+    if (shouldUpdateInvestorPrefs && !skipInvestorPrefs) {
+        if (selectedInvestorId && selectedInvestorName) {
+            const li = document.createElement('li');
+            li.className = 'success';
+            li.innerHTML = `Will update investor preferences for <strong>${selectedInvestorName}</strong>`;
+            executionSummaryList.appendChild(li);
+        } else if (processedData?.preferences && Object.keys(processedData.preferences).length > 0) {
+            const li = document.createElement('li');
+            li.className = 'success';
+            li.innerHTML = 'Will update investor preferences in Notion';
+            executionSummaryList.appendChild(li);
+        }
+    } else {
+        const li = document.createElement('li');
+        li.className = 'warning';
+        li.innerHTML = 'Investor preferences will NOT be updated';
+        executionSummaryList.appendChild(li);
+    }
+
+    // 3. To-Do Items Summary
+    const shouldCreateTodos = createTodosCheckbox && createTodosCheckbox.checked;
+
+    if (shouldCreateTodos && processedData?.todos && processedData.todos.length > 0) {
+        const li = document.createElement('li');
+        li.className = 'success';
+        const todosCount = processedData.todos.length;
+        li.innerHTML = `Will create <span class="count">${todosCount}</span> to-do item${todosCount > 1 ? 's' : ''} in Notion`;
+        executionSummaryList.appendChild(li);
+    } else {
+        const li = document.createElement('li');
+        li.className = 'warning';
+        li.innerHTML = 'To-do items will NOT be created';
+        executionSummaryList.appendChild(li);
+    }
+
+    // Old skip warnings - keep for backward compatibility but hide
+    if (skipWarnings) {
         skipWarnings.classList.add('hidden');
     }
 }
@@ -1006,35 +1288,73 @@ function updateSkipWarnings() {
  * Handle confirm and execute
  */
 async function handleConfirmAndExecute() {
-    // Validation
-    if (!skipHubspot && !selectedContactId) {
-        showPreviewError('Please select or create a HubSpot contact, or skip HubSpot.');
+    // Get user selections first
+    const hubspotAction = document.querySelector('input[name="hubspot-action"]:checked')?.value || 'skip';
+    const shouldUpdateInvestorPrefs = updateInvestorPrefsCheckbox && updateInvestorPrefsCheckbox.checked;
+    const shouldCreateTodos = createTodosCheckbox && createTodosCheckbox.checked;
+
+    // VALIDATION 1: Check if at least one action is selected
+    if (hubspotAction === 'skip' && !shouldUpdateInvestorPrefs && !shouldCreateTodos) {
+        showPreviewError('⚠️ Please select at least one action to perform. You cannot skip all actions.');
         return;
     }
 
+    // VALIDATION 2: Check HubSpot contact selection
+    if (hubspotAction !== 'skip' && !selectedContactId) {
+        showPreviewError('⚠️ Please select or create a HubSpot contact, or choose "Skip HubSpot" option.');
+        return;
+    }
+
+    // VALIDATION 3: Check deal selection if "log_with_deal" is chosen
+    if (hubspotAction === 'log_with_deal') {
+        if (!selectedDealId || !dealDropdown.value) {
+            showPreviewError('⚠️ Please select a deal from the dropdown, or choose "Log call note only" instead.');
+            return;
+        }
+    }
+
+    // VALIDATION 4: Check processed data
     if (!processedData) {
-        showPreviewError('No data to process. Please try again.');
+        showPreviewError('❌ No data to process. Please try again.');
         return;
     }
 
-    // Disable buttons
+    // Disable buttons to prevent double submission
     confirmBtn.disabled = true;
     cancelBtn.disabled = true;
     confirmBtn.textContent = 'Executing...';
 
     try {
+        const todosToSend = shouldCreateTodos ? processedData.todos : [];
+
+        // Initialize and show execution loading screen
+        initializeProgressSteps(hubspotAction, shouldUpdateInvestorPrefs && !skipInvestorPrefs, shouldCreateTodos);
+        showExecutionLoading();
+
+        // Build new structured payload
         const payload = {
-            contact_id: selectedContactId,
-            contact_name: selectedContactName,
-            raw_notes: processedData.raw_notes,
-            summary: processedData.summary,
-            preferences: processedData.preferences,
-            todos: processedData.todos,
-            company_name: processedData.parsed_contact?.company_name || '',
-            skip_hubspot: skipHubspot,
-            skip_investor_prefs: skipInvestorPrefs,
-            investor_page_id: investorPageId
+            hubspot: {
+                action: hubspotAction,
+                contact_id: selectedContactId || null,
+                contact_name: selectedContactName || '',
+                deal_id: (hubspotAction === 'log_with_deal' && selectedDealId) ? selectedDealId : null,
+                summary: processedData.summary || [],
+                raw_notes: processedData.raw_notes || ''
+            },
+            notion: {
+                update_investor_prefs: shouldUpdateInvestorPrefs && !skipInvestorPrefs,
+                create_todos: shouldCreateTodos,
+                company_name: processedData.parsed_contact?.company_name || '',
+                preferences: processedData.preferences || {},
+                todos: todosToSend
+            },
+            contact_name: selectedContactName || ''  // For backward compatibility
         };
+
+        // Mark all steps as in-progress
+        if (hubspotAction !== 'skip') updateProgressStep('hubspot', 'in-progress');
+        if (shouldUpdateInvestorPrefs && !skipInvestorPrefs) updateProgressStep('investor', 'in-progress');
+        if (shouldCreateTodos) updateProgressStep('todos', 'in-progress');
 
         const response = await fetch('/api/confirm-and-execute', {
             method: 'POST',
@@ -1050,6 +1370,24 @@ async function handleConfirmAndExecute() {
             throw new Error(data.error || 'Failed to execute updates');
         }
 
+        // Update progress steps based on results
+        const results = data.results || {};
+        const hubspot = results.hubspot || {};
+        const notion = results.notion || {};
+
+        if (hubspotAction !== 'skip') {
+            updateProgressStep('hubspot', hubspot.note_id ? 'completed' : (hubspot.error ? 'error' : 'completed'));
+        }
+        if (shouldUpdateInvestorPrefs && !skipInvestorPrefs) {
+            updateProgressStep('investor', notion.investor_updated ? 'completed' : (notion.investor_error ? 'error' : 'completed'));
+        }
+        if (shouldCreateTodos) {
+            updateProgressStep('todos', (notion.todos_created > 0 || notion.todos_errors?.length > 0) ? 'completed' : 'error');
+        }
+
+        // Wait a moment to show final state
+        await new Promise(resolve => setTimeout(resolve, 800));
+
         // Show success
         displaySuccess(data);
 
@@ -1064,30 +1402,87 @@ async function handleConfirmAndExecute() {
 }
 
 /**
- * Display success message with details
+ * Display success message with details (supports both old and new response formats)
  */
 function displaySuccess(data) {
     const results = data.results || {};
+    const summary = data.summary || {};
     let html = '';
 
-    if (results.hubspot_note) {
-        html += '<p>HubSpot note logged</p>';
-    }
+    // Check if new format (has hubspot/notion sub-objects)
+    const isNewFormat = results.hubspot || results.notion;
 
-    if (results.notion_investor) {
-        const action = results.notion_investor.action;
-        html += `<p>Investor preferences ${action}</p>`;
-    }
+    if (isNewFormat) {
+        // New structured format
+        const hubspot = results.hubspot || {};
+        const notion = results.notion || {};
 
-    if (results.notion_todos && results.notion_todos.length > 0) {
-        html += `<p>${results.notion_todos.length} to-do item(s) created</p>`;
-    }
+        // HubSpot results
+        if (hubspot.action_taken === 'skipped') {
+            html += '<p style="color: #64748b;">⊘ HubSpot note skipped</p>';
+        } else if (hubspot.note_id) {
+            if (hubspot.action_taken === 'log_with_deal' && hubspot.deal_id) {
+                html += `<p style="color: #10b981;">✓ HubSpot note created for <strong>${escapeHtml(hubspot.contact_name || 'contact')}</strong> and associated with deal</p>`;
+            } else {
+                html += `<p style="color: #10b981;">✓ HubSpot note created for <strong>${escapeHtml(hubspot.contact_name || 'contact')}</strong></p>`;
+            }
+        } else if (hubspot.error) {
+            html += `<p style="color: #dc2626;">✗ HubSpot note failed: ${escapeHtml(hubspot.error)}</p>`;
+        }
 
-    if (results.errors && results.errors.length > 0) {
-        html += '<p style="color: #d97706;">⚠️ Some errors occurred:</p>';
-        results.errors.forEach(error => {
-            html += `<p style="color: #d97706; font-size: 0.9rem;">• ${escapeHtml(error)}</p>`;
-        });
+        // Notion Investor results
+        if (notion.investor_updated) {
+            const action = notion.investor_action || 'updated';
+            html += `<p style="color: #10b981;">✓ Investor preferences ${action}</p>`;
+        } else if (notion.investor_error) {
+            html += `<p style="color: #dc2626;">✗ Investor preferences failed: ${escapeHtml(notion.investor_error)}</p>`;
+        } else {
+            html += '<p style="color: #64748b;">⊘ Investor preferences skipped</p>';
+        }
+
+        // Notion TODOs results
+        if (notion.todos_created > 0) {
+            html += `<p style="color: #10b981;">✓ Created <strong>${notion.todos_created}</strong> to-do item${notion.todos_created > 1 ? 's' : ''}</p>`;
+        } else {
+            html += '<p style="color: #64748b;">⊘ No to-do items created</p>';
+        }
+
+        // Errors
+        if (notion.todos_errors && notion.todos_errors.length > 0) {
+            html += '<p style="color: #d97706;">⚠️ Some to-do errors occurred:</p>';
+            notion.todos_errors.forEach(error => {
+                html += `<p style="color: #d97706; font-size: 0.9rem; margin-left: 20px;">• ${escapeHtml(error)}</p>`;
+            });
+        }
+
+        if (results.errors && results.errors.length > 0) {
+            html += '<p style="color: #d97706;">⚠️ Additional errors:</p>';
+            results.errors.forEach(error => {
+                html += `<p style="color: #d97706; font-size: 0.9rem; margin-left: 20px;">• ${escapeHtml(error)}</p>`;
+            });
+        }
+
+    } else {
+        // Old format (backward compatibility)
+        if (results.hubspot_note) {
+            html += '<p style="color: #10b981;">✓ HubSpot note logged</p>';
+        }
+
+        if (results.notion_investor) {
+            const action = results.notion_investor.action;
+            html += `<p style="color: #10b981;">✓ Investor preferences ${action}</p>`;
+        }
+
+        if (results.notion_todos && results.notion_todos.length > 0) {
+            html += `<p style="color: #10b981;">✓ ${results.notion_todos.length} to-do item(s) created</p>`;
+        }
+
+        if (results.errors && results.errors.length > 0) {
+            html += '<p style="color: #d97706;">⚠️ Some errors occurred:</p>';
+            results.errors.forEach(error => {
+                html += `<p style="color: #d97706; font-size: 0.9rem; margin-left: 20px;">• ${escapeHtml(error)}</p>`;
+            });
+        }
     }
 
     if (!html) {
@@ -1113,19 +1508,43 @@ function handleCancel() {
 }
 
 /**
- * Handle processing new notes
+ * Handle processing new notes - Complete reset
  */
 function handleNewNotes() {
+    // Reset all data state
     processedData = null;
     selectedContactId = null;
     selectedContactName = null;
+    selectedDealId = null;
+    selectedInvestorId = null;
+    selectedInvestorName = null;
+    investorPageId = null;
     skipHubspot = false;
     skipInvestorPrefs = false;
-    investorPageId = null;
+
+    // Clear input
     notesInput.value = '';
+
+    // Reset checkboxes
+    if (updateInvestorPrefsCheckbox) updateInvestorPrefsCheckbox.checked = true;
+    if (createTodosCheckbox) createTodosCheckbox.checked = true;
+
+    // Reset buttons
+    confirmBtn.disabled = false;
+    cancelBtn.disabled = false;
+    confirmBtn.textContent = 'Confirm & Execute';
+
+    // Clear displays
     hideError();
     hidePreviewError();
     successDetails.innerHTML = '';
+    if (executionStatusMessage) executionStatusMessage.textContent = 'Executing actions...';
+    if (progressSteps) progressSteps.innerHTML = '';
+
+    // Clear summary list
+    if (executionSummaryList) executionSummaryList.innerHTML = '';
+
+    // Show input section
     showInput();
 }
 
@@ -1136,6 +1555,7 @@ function showInput() {
     inputSection.classList.remove('hidden');
     loadingSection.classList.add('hidden');
     resultsSection.classList.add('hidden');
+    executionLoadingSection.classList.add('hidden');
     successSection.classList.add('hidden');
     processBtn.disabled = false;
 }
@@ -1151,6 +1571,7 @@ function showResults() {
     inputSection.classList.add('hidden');
     loadingSection.classList.add('hidden');
     resultsSection.classList.remove('hidden');
+    executionLoadingSection.classList.add('hidden');
     successSection.classList.add('hidden');
     confirmBtn.disabled = false;
     cancelBtn.disabled = false;
@@ -1161,7 +1582,67 @@ function showSuccess() {
     inputSection.classList.add('hidden');
     loadingSection.classList.add('hidden');
     resultsSection.classList.add('hidden');
+    executionLoadingSection.classList.add('hidden');
     successSection.classList.remove('hidden');
+}
+
+function showExecutionLoading() {
+    resultsSection.classList.add('hidden');
+    executionLoadingSection.classList.remove('hidden');
+}
+
+function initializeProgressSteps(hubspotAction, updateInvestorPrefs, createTodos) {
+    progressSteps.innerHTML = '';
+    const steps = [];
+
+    // HubSpot step
+    if (hubspotAction !== 'skip') {
+        const stepText = hubspotAction === 'log_with_deal'
+            ? 'Logging call note to HubSpot and associating with deal'
+            : 'Logging call note to HubSpot';
+        steps.push({ id: 'hubspot', text: stepText, status: 'pending' });
+    }
+
+    // Notion investor step
+    if (updateInvestorPrefs) {
+        steps.push({ id: 'investor', text: 'Updating investor preferences in Notion', status: 'pending' });
+    }
+
+    // Notion todos step
+    if (createTodos) {
+        steps.push({ id: 'todos', text: 'Creating to-do items in Notion', status: 'pending' });
+    }
+
+    // Create step elements
+    steps.forEach(step => {
+        const stepDiv = document.createElement('div');
+        stepDiv.className = 'progress-step pending';
+        stepDiv.id = `progress-step-${step.id}`;
+        stepDiv.innerHTML = `
+            <div class="progress-step-icon">⏳</div>
+            <div class="progress-step-text">${step.text}</div>
+        `;
+        progressSteps.appendChild(stepDiv);
+    });
+}
+
+function updateProgressStep(stepId, status) {
+    const stepElement = document.getElementById(`progress-step-${stepId}`);
+    if (!stepElement) return;
+
+    stepElement.className = `progress-step ${status}`;
+
+    const iconElement = stepElement.querySelector('.progress-step-icon');
+    if (status === 'in-progress') {
+        iconElement.textContent = '⏳';
+        executionStatusMessage.textContent = stepElement.querySelector('.progress-step-text').textContent + '...';
+    } else if (status === 'completed') {
+        iconElement.textContent = '✓';
+        iconElement.style.color = '#10b981';
+    } else if (status === 'error') {
+        iconElement.textContent = '✗';
+        iconElement.style.color = '#dc2626';
+    }
 }
 
 function showError(message) {
