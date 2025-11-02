@@ -165,6 +165,78 @@ textarea:focus {
     100% { transform: rotate(360deg); }
 }
 
+/* Execution Loading Section */
+#execution-loading-section {
+    text-align: center;
+    padding: 60px 20px;
+}
+
+#execution-status-message {
+    font-size: 1.1rem;
+    color: #0066cc;
+    margin-bottom: 20px;
+    font-weight: 500;
+}
+
+.execution-progress {
+    max-width: 500px;
+    margin: 30px auto;
+    text-align: left;
+}
+
+#progress-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.progress-step {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    background: white;
+    border-radius: 8px;
+    border-left: 4px solid transparent;
+    transition: all 0.3s ease;
+}
+
+.progress-step.pending {
+    border-left-color: #d1d5db;
+    opacity: 0.6;
+}
+
+.progress-step.in-progress {
+    border-left-color: #0066cc;
+    background: #f0f9ff;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.progress-step.completed {
+    border-left-color: #10b981;
+}
+
+.progress-step.error {
+    border-left-color: #dc2626;
+}
+
+.progress-step-icon {
+    margin-right: 12px;
+    font-size: 1.2rem;
+    min-width: 24px;
+    text-align: center;
+}
+
+.progress-step-text {
+    flex: 1;
+    font-size: 0.95rem;
+    color: #374151;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
 /* Results Section */
 .info-text {
     color: #666;
@@ -686,6 +758,261 @@ footer {
     background: #f9fafb;
     color: #666;
     font-size: 0.9rem;
+}
+
+/* HubSpot Action Cards */
+.hubspot-action-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 15px;
+    margin: 20px 0;
+}
+
+.hubspot-action-card {
+    position: relative;
+    display: block;
+    cursor: pointer;
+}
+
+.hubspot-action-card input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.action-card-content {
+    background: white;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+    transition: all 0.3s ease;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.hubspot-action-card:hover .action-card-content {
+    border-color: #0066cc;
+    transform: translateY(-3px);
+    box-shadow: 0 4px 12px rgba(0, 102, 204, 0.2);
+}
+
+.hubspot-action-card input[type="radio"]:checked + .action-card-content {
+    border-color: #0066cc;
+    background: #f0f9ff;
+    box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
+}
+
+.action-icon {
+    font-size: 2rem;
+    margin-bottom: 10px;
+    opacity: 0.8;
+}
+
+.action-title {
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 8px;
+    font-size: 0.95rem;
+    line-height: 1.3;
+}
+
+.action-desc {
+    font-size: 0.8rem;
+    color: #666;
+    line-height: 1.4;
+}
+
+/* Deal Selection */
+.deal-selection {
+    background: #f9fafb;
+    padding: 20px;
+    border-radius: 8px;
+    margin-top: 20px;
+    border: 1px solid #e5e7eb;
+}
+
+.deal-label {
+    display: block;
+    margin-bottom: 10px;
+    font-weight: 500;
+    color: #555;
+    font-size: 14px;
+}
+
+.deal-dropdown {
+    width: 100%;
+    padding: 12px;
+    border: 2px solid #e0e0e0;
+    border-radius: 6px;
+    font-size: 14px;
+    font-family: inherit;
+    background: white;
+    cursor: pointer;
+    transition: border-color 0.3s ease;
+}
+
+.deal-dropdown:focus {
+    outline: none;
+    border-color: #0066cc;
+}
+
+.deal-dropdown:disabled {
+    background: #f3f4f6;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.deal-status {
+    margin-top: 10px;
+    font-size: 0.85rem;
+    color: #666;
+}
+
+.deal-status.error {
+    color: #dc2626;
+}
+
+.deal-status.warning {
+    color: #d97706;
+}
+
+.deal-status.success {
+    color: #10b981;
+}
+
+/* Notion Checkbox Group */
+.notion-checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 25px;
+    margin-top: 15px;
+}
+
+.notion-checkbox-item {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 15px;
+    background: #fafbfc;
+    transition: all 0.3s ease;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 1rem;
+    color: #333;
+    margin-bottom: 15px;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+    margin-right: 12px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.checkbox-text {
+    user-select: none;
+}
+
+.preview-container {
+    margin-left: 32px;
+    transition: opacity 0.3s ease;
+}
+
+.preview-container.disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.skip-action-warning {
+    background: #fef3c7;
+    border: 1px solid #fbbf24;
+    border-radius: 6px;
+    padding: 12px;
+    margin-top: 15px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9rem;
+    color: #92400e;
+}
+
+.skip-icon {
+    font-size: 1.2rem;
+}
+
+/* Execution Summary Card */
+.summary-card {
+    background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 100%);
+    border: 2px solid #0284c7;
+    border-radius: 12px;
+    padding: 24px;
+    margin-top: 30px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(2, 132, 199, 0.1);
+}
+
+.summary-card h3 {
+    margin: 0 0 16px 0;
+    color: #0c4a6e;
+    font-size: 1.3rem;
+    font-weight: 600;
+}
+
+.summary-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.summary-list li {
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    background: white;
+    border-radius: 8px;
+    font-size: 1rem;
+    line-height: 1.5;
+    border-left: 4px solid transparent;
+    transition: all 0.2s ease;
+}
+
+.summary-list li.success {
+    border-left-color: #10b981;
+}
+
+.summary-list li.warning {
+    border-left-color: #f59e0b;
+    background: #fffbeb;
+}
+
+.summary-list li.success::before {
+    content: '✓';
+    color: #10b981;
+    font-weight: bold;
+    margin-right: 8px;
+    font-size: 1.1rem;
+}
+
+.summary-list li.warning::before {
+    content: '⚠️';
+    margin-right: 8px;
+}
+
+.summary-list li strong {
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.summary-list li .count {
+    font-weight: 700;
+    color: #0284c7;
 }
 
 /* Responsive Design */
