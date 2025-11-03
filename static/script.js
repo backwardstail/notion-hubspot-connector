@@ -8,7 +8,26 @@ let investorPageId = null;
 let selectedInvestorId = null;
 let selectedInvestorName = null;
 let selectedDealId = null;
+let selectedDealData = null; // Store full deal data including stage, next_step, etc.
 let hubspotAction = 'log_only'; // 'log_only', 'log_with_deal', or 'skip'
+
+// Deal stage display name mapping
+const DEAL_STAGE_NAMES = {
+    'appointmentscheduled': '1. New Lead (Sales Pipeline)',
+    'qualifiedtobuy': '2. Reviewing Teaser / Executing NDA (Sales Pipeline)',
+    'presentationscheduled': '3. Reviewing Data / NDA Signed (Sales Pipeline)',
+    'decisionmakerboughtin': '4. IOI Issued / Deep Dive Analysis (Sales Pipeline)',
+    'contractsent': '5. LOI Issued (Sales Pipeline)',
+    '1110891580': '6. LOI Signed (Sales Pipeline)',
+    'closedwon': '7. Closed Won (Sales Pipeline)',
+    'closedlost': '8. Closed Lost (Sales Pipeline)',
+    '1173780286': '9. Closed Declined (Sales Pipeline)'
+};
+
+// Helper function to get display name for deal stage
+function getDealStageDisplayName(stageValue) {
+    return DEAL_STAGE_NAMES[stageValue] || stageValue;
+}
 
 // DOM elements - Input Section
 const notesInput = document.getElementById('notes-input');
@@ -82,6 +101,15 @@ const hubspotActionRadios = document.querySelectorAll('input[name="hubspot-actio
 const dealSelection = document.getElementById('deal-selection');
 const dealDropdown = document.getElementById('deal-dropdown');
 const dealSelectionStatus = document.getElementById('deal-selection-status');
+const dealSearchInput = document.getElementById('deal-search-input');
+const searchDealsBtn = document.getElementById('search-deals-btn');
+const dealSearchStatus = document.getElementById('deal-search-status');
+const dealSearchResults = document.getElementById('deal-search-results');
+const dealSearchDropdown = document.getElementById('deal-search-dropdown');
+const dealDetails = document.getElementById('deal-details');
+const dealStageInput = document.getElementById('deal-stage');
+const dealNextStepInput = document.getElementById('deal-next-step');
+const dealNextStepDateInput = document.getElementById('deal-next-step-date');
 
 // DOM elements - Notion Checkboxes
 const updateInvestorPrefsCheckbox = document.getElementById('update-investor-prefs');
@@ -90,6 +118,7 @@ const investorPreviewContainer = document.getElementById('investor-preview-conta
 const todosPreviewContainer = document.getElementById('todos-preview-container');
 const investorSkipWarning = document.getElementById('investor-skip-warning');
 const todosSkipWarning = document.getElementById('todos-skip-warning');
+const selectAllTodosCheckbox = document.getElementById('select-all-todos');
 
 // DOM elements - Actions
 const confirmBtn = document.getElementById('confirm-btn');
@@ -141,12 +170,15 @@ hubspotActionRadios.forEach(radio => {
     radio.addEventListener('change', handleHubSpotActionChange);
 });
 
-// Deal dropdown event listener
+// Deal dropdown event listeners
 dealDropdown.addEventListener('change', handleDealSelection);
+searchDealsBtn.addEventListener('click', handleSearchDeals);
+dealSearchDropdown.addEventListener('change', handleDealSearchSelection);
 
 // Notion checkbox event listeners
 updateInvestorPrefsCheckbox.addEventListener('change', handleInvestorPrefsCheckboxChange);
 createTodosCheckbox.addEventListener('change', handleTodosCheckboxChange);
+selectAllTodosCheckbox.addEventListener('change', handleSelectAllTodos);
 
 /**
  * Handle processing of notes
@@ -230,6 +262,9 @@ function displayPreview(preview) {
 
     // Display call summary
     displaySummary(preview.summary || []);
+
+    // Display parsed deals in deal search
+    displayParsedDeals(preview);
 
     // Display preferences
     displayPreferences(preview);
@@ -321,6 +356,48 @@ function displaySummary(summary) {
 }
 
 /**
+ * Display parsed deals in deal search dropdown
+ */
+function displayParsedDeals(preview) {
+    const deals = preview.hubspot_deals || [];
+    const dealStatus = preview.deal_status;
+
+    // Clear any previous search results
+    dealSearchResults.classList.add('hidden');
+    dealSearchDropdown.innerHTML = '<option value="">Select a deal...</option>';
+    dealSearchInput.value = '';
+    dealSearchStatus.textContent = '';
+
+    // If deals were found, populate the dropdown
+    if (dealStatus === 'found' && deals.length > 0) {
+        deals.forEach(deal => {
+            const option = document.createElement('option');
+            option.value = deal.id;
+            option.dealData = deal; // Attach full deal data
+            const amount = deal.amount ? `$${parseFloat(deal.amount).toLocaleString()}` : '$0';
+            const stageDisplay = getDealStageDisplayName(deal.stage) || 'Unknown';
+            option.textContent = `${deal.name || 'Unnamed Deal'} - ${amount} - ${stageDisplay}`;
+            dealSearchDropdown.appendChild(option);
+        });
+
+        dealSearchResults.classList.remove('hidden');
+        dealSearchStatus.textContent = `✓ Found ${deals.length} deal(s) from notes`;
+        dealSearchStatus.style.color = '#10b981';
+
+        console.log(`Populated ${deals.length} parsed deals in deal search`);
+    } else if (dealStatus === 'not_found') {
+        // Deal was mentioned in notes but not found in HubSpot
+        const parsedDeal = preview.parsed_deal || {};
+        const dealName = parsedDeal.deal_name || parsedDeal.search_keywords;
+        if (dealName) {
+            dealSearchInput.value = dealName;
+            dealSearchStatus.textContent = `⚠️ Deal "${dealName}" mentioned in notes but not found in HubSpot`;
+            dealSearchStatus.style.color = '#d97706';
+        }
+    }
+}
+
+/**
  * Display investor preferences as JSON
  */
 function displayPreferences(preview) {
@@ -401,24 +478,78 @@ function displayTodos(todos) {
         return;
     }
 
-    todos.forEach(todo => {
-        const tr = document.createElement('tr');
+    // Calculate default date (tomorrow)
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
 
+    todos.forEach((todo, index) => {
+        const tr = document.createElement('tr');
+        tr.setAttribute('data-todo-index', index);
+
+        // Checkbox cell
+        const tdCheckbox = document.createElement('td');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = true;
+        checkbox.classList.add('todo-checkbox');
+        checkbox.setAttribute('data-index', index);
+        checkbox.addEventListener('change', handleTodoCheckboxChange);
+        tdCheckbox.appendChild(checkbox);
+
+        // Task name cell
         const tdTask = document.createElement('td');
         tdTask.textContent = todo.task_name || 'N/A';
 
+        // Due date cell with dropdown selector
         const tdDue = document.createElement('td');
-        tdDue.textContent = todo.due_date || 'N/A';
+        const dateSelect = document.createElement('select');
+        dateSelect.classList.add('todo-date-selector');
+        dateSelect.setAttribute('data-index', index);
 
+        // Date options
+        const dates = [
+            { value: tomorrowStr, label: 'Tomorrow', days: 1 },
+            { value: getDateDaysFromNow(7), label: '7 days', days: 7 },
+            { value: getDateDaysFromNow(30), label: '30 days', days: 30 },
+            { value: getDateDaysFromNow(90), label: '90 days', days: 90 }
+        ];
+
+        dates.forEach(({ value, label }) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            dateSelect.appendChild(option);
+        });
+
+        // Set default to tomorrow
+        dateSelect.value = tomorrowStr;
+        dateSelect.addEventListener('change', handleTodoDateChange);
+        tdDue.appendChild(dateSelect);
+
+        // Next step cell
         const tdNext = document.createElement('td');
         tdNext.textContent = todo.next_step || 'N/A';
 
+        tr.appendChild(tdCheckbox);
         tr.appendChild(tdTask);
         tr.appendChild(tdDue);
         tr.appendChild(tdNext);
 
         todosTbody.appendChild(tr);
     });
+
+    // Update the count to show selected todos
+    updateSelectedTodosCount();
+}
+
+/**
+ * Helper function to get date N days from now
+ */
+function getDateDaysFromNow(days) {
+    const date = new Date();
+    date.setDate(date.getDate() + days);
+    return date.toISOString().split('T')[0];
 }
 
 /**
@@ -1120,10 +1251,11 @@ async function fetchDealsForContact(contactId) {
             deals.forEach(deal => {
                 const option = document.createElement('option');
                 option.value = deal.id;
+                option.dealData = deal; // Attach full deal data to the option
                 // Format: "Deal Name - $Amount - Stage"
                 const amount = deal.amount ? `$${parseFloat(deal.amount).toLocaleString()}` : '$0';
-                const stage = deal.stage || 'Unknown';
-                option.textContent = `${deal.name || 'Unnamed Deal'} - ${amount} - ${stage}`;
+                const stageDisplay = getDealStageDisplayName(deal.stage) || 'Unknown';
+                option.textContent = `${deal.name || 'Unnamed Deal'} - ${amount} - ${stageDisplay}`;
                 dealDropdown.appendChild(option);
             });
             dealSelectionStatus.textContent = `✓ Found ${deals.length} deal(s)`;
@@ -1146,7 +1278,123 @@ async function fetchDealsForContact(contactId) {
 function handleDealSelection(e) {
     selectedDealId = e.target.value;
     console.log('Deal selected:', selectedDealId);
+
+    if (selectedDealId) {
+        // Find the selected deal data from the dropdown
+        const selectedOption = dealDropdown.options[dealDropdown.selectedIndex];
+        const dealData = selectedOption.dealData; // We'll attach this when populating
+
+        if (dealData) {
+            selectedDealData = dealData;
+            populateDealFields(dealData);
+            dealDetails.classList.remove('hidden');
+        }
+    } else {
+        dealDetails.classList.add('hidden');
+        selectedDealData = null;
+    }
+
     updateExecutionSummary();
+}
+
+/**
+ * Populate deal fields with current deal data
+ */
+function populateDealFields(dealData) {
+    dealStageInput.value = dealData.stage || '';
+    dealNextStepInput.value = dealData.next_step || '';
+    dealNextStepDateInput.value = dealData.next_step_date || '';
+}
+
+/**
+ * Handle search for deals
+ */
+async function handleSearchDeals() {
+    const query = dealSearchInput.value.trim();
+
+    if (!query) {
+        dealSearchStatus.textContent = '⚠️ Please enter a search term';
+        dealSearchStatus.style.color = '#d97706';
+        return;
+    }
+
+    dealSearchStatus.textContent = 'Searching...';
+    dealSearchStatus.style.color = '#0c4a6e';
+    searchDealsBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/search-deals', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ query }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to search deals');
+        }
+
+        const deals = data.deals || [];
+
+        if (deals.length === 0) {
+            dealSearchStatus.textContent = `⚠️ No deals found for "${query}"`;
+            dealSearchStatus.style.color = '#d97706';
+            dealSearchResults.classList.add('hidden');
+        } else {
+            dealSearchStatus.textContent = `✓ Found ${deals.length} deal(s)`;
+            dealSearchStatus.style.color = '#10b981';
+
+            // Populate search results dropdown
+            dealSearchDropdown.innerHTML = '<option value="">Select a deal...</option>';
+            deals.forEach(deal => {
+                const option = document.createElement('option');
+                option.value = deal.id;
+                option.dealData = deal; // Attach full deal data
+                const amount = deal.amount ? `$${parseFloat(deal.amount).toLocaleString()}` : '$0';
+                const stageDisplay = getDealStageDisplayName(deal.stage) || 'Unknown';
+                option.textContent = `${deal.name || 'Unnamed Deal'} - ${amount} - ${stageDisplay}`;
+                dealSearchDropdown.appendChild(option);
+            });
+
+            dealSearchResults.classList.remove('hidden');
+        }
+    } catch (error) {
+        console.error('Error searching deals:', error);
+        dealSearchStatus.textContent = `❌ Error: ${error.message}`;
+        dealSearchStatus.style.color = '#dc2626';
+    } finally {
+        searchDealsBtn.disabled = false;
+    }
+}
+
+/**
+ * Handle deal search dropdown selection
+ */
+function handleDealSearchSelection(e) {
+    selectedDealId = e.target.value;
+
+    if (selectedDealId) {
+        const selectedOption = dealSearchDropdown.options[dealSearchDropdown.selectedIndex];
+        const dealData = selectedOption.dealData;
+
+        // Store and populate deal data
+        if (dealData) {
+            selectedDealData = dealData;
+            populateDealFields(dealData);
+            dealDetails.classList.remove('hidden');
+        }
+
+        console.log('Deal selected from search:', selectedDealId);
+        updateExecutionSummary();
+    } else {
+        // Clear deal details when deselected
+        selectedDealData = null;
+        dealDetails.classList.add('hidden');
+        updateExecutionSummary();
+    }
 }
 
 /**
@@ -1189,6 +1437,91 @@ function handleTodosCheckboxChange(e) {
     }
 
     updateExecutionSummary();
+}
+
+/**
+ * Handle individual todo checkbox change
+ */
+function handleTodoCheckboxChange(e) {
+    const checkbox = e.target;
+    const index = checkbox.getAttribute('data-index');
+    const row = todosTbody.querySelector(`tr[data-todo-index="${index}"]`);
+
+    if (checkbox.checked) {
+        row.classList.remove('todo-disabled');
+    } else {
+        row.classList.add('todo-disabled');
+    }
+
+    updateSelectedTodosCount();
+    updateExecutionSummary();
+}
+
+/**
+ * Handle todo date selection change
+ */
+function handleTodoDateChange(e) {
+    // Date changed - just trigger execution summary update
+    updateExecutionSummary();
+}
+
+/**
+ * Update the count of selected todos
+ */
+function updateSelectedTodosCount() {
+    const checkboxes = document.querySelectorAll('.todo-checkbox');
+    const selectedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+    todosCountInline.textContent = selectedCount;
+}
+
+/**
+ * Handle select all todos checkbox
+ */
+function handleSelectAllTodos(e) {
+    const isChecked = e.target.checked;
+    const todoCheckboxes = document.querySelectorAll('.todo-checkbox');
+
+    todoCheckboxes.forEach(checkbox => {
+        checkbox.checked = isChecked;
+        const index = checkbox.getAttribute('data-index');
+        const row = todosTbody.querySelector(`tr[data-todo-index="${index}"]`);
+
+        if (isChecked) {
+            row.classList.remove('todo-disabled');
+        } else {
+            row.classList.add('todo-disabled');
+        }
+    });
+
+    updateSelectedTodosCount();
+    updateExecutionSummary();
+}
+
+/**
+ * Get selected todos with their custom dates
+ */
+function getSelectedTodos() {
+    const selectedTodos = [];
+    const todoCheckboxes = document.querySelectorAll('.todo-checkbox');
+
+    todoCheckboxes.forEach(checkbox => {
+        if (checkbox.checked) {
+            const index = parseInt(checkbox.getAttribute('data-index'));
+            const dateSelector = document.querySelector(`.todo-date-selector[data-index="${index}"]`);
+            const selectedDate = dateSelector ? dateSelector.value : null;
+
+            // Get original todo data and add custom date
+            const originalTodo = processedData.todos[index];
+            if (originalTodo) {
+                selectedTodos.push({
+                    ...originalTodo,
+                    due_date: selectedDate || originalTodo.due_date
+                });
+            }
+        }
+    });
+
+    return selectedTodos;
 }
 
 /**
@@ -1266,11 +1599,21 @@ function updateExecutionSummary() {
     const shouldCreateTodos = createTodosCheckbox && createTodosCheckbox.checked;
 
     if (shouldCreateTodos && processedData?.todos && processedData.todos.length > 0) {
-        const li = document.createElement('li');
-        li.className = 'success';
-        const todosCount = processedData.todos.length;
-        li.innerHTML = `Will create <span class="count">${todosCount}</span> to-do item${todosCount > 1 ? 's' : ''} in Notion`;
-        executionSummaryList.appendChild(li);
+        // Count selected todos
+        const selectedTodos = getSelectedTodos();
+        const selectedCount = selectedTodos.length;
+
+        if (selectedCount > 0) {
+            const li = document.createElement('li');
+            li.className = 'success';
+            li.innerHTML = `Will create <span class="count">${selectedCount}</span> to-do item${selectedCount > 1 ? 's' : ''} in Notion`;
+            executionSummaryList.appendChild(li);
+        } else {
+            const li = document.createElement('li');
+            li.className = 'warning';
+            li.innerHTML = 'To-do items will NOT be created (none selected)';
+            executionSummaryList.appendChild(li);
+        }
     } else {
         const li = document.createElement('li');
         li.className = 'warning';
@@ -1299,15 +1642,15 @@ async function handleConfirmAndExecute() {
         return;
     }
 
-    // VALIDATION 2: Check HubSpot contact selection
-    if (hubspotAction !== 'skip' && !selectedContactId) {
-        showPreviewError('⚠️ Please select or create a HubSpot contact, or choose "Skip HubSpot" option.');
+    // VALIDATION 2: Check HubSpot contact or deal selection
+    if (hubspotAction !== 'skip' && !selectedContactId && !selectedDealId) {
+        showPreviewError('⚠️ Please select a HubSpot contact or deal, or choose "Skip HubSpot" option.');
         return;
     }
 
     // VALIDATION 3: Check deal selection if "log_with_deal" is chosen
     if (hubspotAction === 'log_with_deal') {
-        if (!selectedDealId || !dealDropdown.value) {
+        if (!selectedDealId) {
             showPreviewError('⚠️ Please select a deal from the dropdown, or choose "Log call note only" instead.');
             return;
         }
@@ -1325,19 +1668,29 @@ async function handleConfirmAndExecute() {
     confirmBtn.textContent = 'Executing...';
 
     try {
-        const todosToSend = shouldCreateTodos ? processedData.todos : [];
+        // Get only selected todos with custom dates
+        const todosToSend = shouldCreateTodos ? getSelectedTodos() : [];
 
         // Initialize and show execution loading screen
-        initializeProgressSteps(hubspotAction, shouldUpdateInvestorPrefs && !skipInvestorPrefs, shouldCreateTodos);
+        initializeProgressSteps(hubspotAction, shouldUpdateInvestorPrefs && !skipInvestorPrefs, shouldCreateTodos && todosToSend.length > 0);
         showExecutionLoading();
 
         // Build new structured payload
+        // Build deal updates object if we have a deal selected
+        const dealUpdates = {};
+        if (selectedDealId) {
+            if (dealStageInput.value) dealUpdates.dealstage = dealStageInput.value;
+            if (dealNextStepInput.value) dealUpdates.hs_next_step = dealNextStepInput.value;
+            if (dealNextStepDateInput.value) dealUpdates.next_steps_date = dealNextStepDateInput.value;
+        }
+
         const payload = {
             hubspot: {
                 action: hubspotAction,
                 contact_id: selectedContactId || null,
                 contact_name: selectedContactName || '',
-                deal_id: (hubspotAction === 'log_with_deal' && selectedDealId) ? selectedDealId : null,
+                deal_id: selectedDealId || null,
+                deal_updates: dealUpdates,
                 summary: processedData.summary || [],
                 raw_notes: processedData.raw_notes || ''
             },

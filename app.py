@@ -3,7 +3,7 @@ import logging
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from hubspot_client import search_hubspot_contact, create_hubspot_contact, log_hubspot_note, get_contact_deals
+from hubspot_client import search_hubspot_contact, create_hubspot_contact, log_hubspot_note, get_contact_deals, search_hubspot_deals, update_hubspot_deal
 from notion_client import (
     search_investor_preferences,
     get_page_properties,
@@ -74,11 +74,13 @@ def process_notes():
 
         parsed_data = parse_result['data']
         contact_info = parsed_data.get('contact', {})
+        deal_info = parsed_data.get('deal', {})
         summary = parsed_data.get('summary', [])
         preferences = parsed_data.get('preferences', {})
         todos = parsed_data.get('todos', [])
 
         logger.info(f"Parsed data - Contact: {contact_info.get('company_name')}, "
+                   f"Deal: {deal_info.get('deal_name', 'None')}, "
                    f"Summary: {len(summary)} bullets, TODOs: {len(todos)}")
 
         # STEP 2: Search HubSpot for contact
@@ -115,12 +117,35 @@ def process_notes():
                 contact_search_status = 'found_by_company'
                 logger.info(f"Found {len(hubspot_contacts)} contact(s) by company name")
 
+        # STEP 2.5: Search HubSpot for deal if mentioned in notes
+        hubspot_deals = []
+        deal_search_status = 'not_searched'
+
+        # Check if deal information was extracted
+        if deal_info and (deal_info.get('deal_name') or deal_info.get('search_keywords')):
+            # Use deal_name or search_keywords to search
+            search_term = deal_info.get('deal_name') or deal_info.get('search_keywords')
+
+            if search_term:
+                logger.info(f"Searching for deal: {search_term}")
+                hubspot_deals = search_hubspot_deals(search_term, HUBSPOT_API_KEY)
+
+                if hubspot_deals:
+                    deal_search_status = 'found'
+                    logger.info(f"Found {len(hubspot_deals)} deal(s) matching '{search_term}'")
+                else:
+                    deal_search_status = 'not_found'
+                    logger.info(f"No deals found for '{search_term}'")
+
         # STEP 3: Build preview response
         preview_data = {
             'raw_notes': notes,
             'parsed_contact': contact_info,
+            'parsed_deal': deal_info,
             'hubspot_contacts': hubspot_contacts,
             'contact_status': contact_search_status,
+            'hubspot_deals': hubspot_deals,
+            'deal_status': deal_search_status,
             'summary': summary,
             'preferences': preferences,
             'todos': todos,
@@ -349,6 +374,41 @@ def get_deals():
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
+@app.route('/api/search-deals', methods=['POST'])
+def search_deals():
+    """
+    Search for deals in HubSpot by query (name or company)
+
+    Request body should include:
+    - query: Search term (deal name or company)
+    """
+    try:
+        data = request.get_json()
+
+        if not data or 'query' not in data:
+            return jsonify({'error': 'No query provided'}), 400
+
+        query = data.get('query', '').strip()
+
+        if not query:
+            return jsonify({'error': 'Query cannot be empty'}), 400
+
+        logger.info(f"Searching deals for query: {query}")
+
+        # Search deals in HubSpot
+        deals = search_hubspot_deals(query, HUBSPOT_API_KEY)
+
+        return jsonify({
+            'success': True,
+            'deals': deals,
+            'count': len(deals)
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error searching deals: {str(e)}", exc_info=True)
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
 @app.route('/api/confirm-and-execute', methods=['POST'])
 def confirm_and_execute():
     """
@@ -408,6 +468,7 @@ def confirm_and_execute():
             contact_id = hubspot_data.get('contact_id')
             contact_name = hubspot_data.get('contact_name', data.get('contact_name', ''))
             deal_id = hubspot_data.get('deal_id')
+            deal_updates = hubspot_data.get('deal_updates', {})  # New: deal property updates
             summary = hubspot_data.get('summary', [])
             raw_notes = hubspot_data.get('raw_notes', '')
 
@@ -486,11 +547,11 @@ def confirm_and_execute():
                 # Format summary for note
                 summary_text = '\n'.join([f'• {bullet}' for bullet in summary])
 
-                # Determine if we should include deal_id
-                note_deal_id = deal_id if hubspot_action == 'log_with_deal' else None
+                # Use deal_id if provided (from frontend, always send if we have one)
+                note_deal_id = deal_id
 
                 note_result = log_hubspot_note(
-                    contact_id,
+                    contact_id,  # Can be None if only logging to deal
                     summary_text,
                     raw_notes,
                     HUBSPOT_API_KEY,
@@ -503,6 +564,26 @@ def confirm_and_execute():
                     results['hubspot']['deal_id'] = note_deal_id
 
                     logger.info(f"Created HubSpot note: {results['hubspot']['note_id']}, Action: {hubspot_action}, Deal: {note_deal_id}")
+
+                    # Update deal properties if provided and we have a deal ID
+                    if note_deal_id and deal_updates:
+                        try:
+                            # Filter out empty values
+                            properties_to_update = {k: v for k, v in deal_updates.items() if v}
+
+                            if properties_to_update:
+                                logger.info(f"Updating deal {note_deal_id} with properties: {properties_to_update}")
+                                deal_update_result = update_hubspot_deal(note_deal_id, properties_to_update, HUBSPOT_API_KEY)
+
+                                if deal_update_result['success']:
+                                    results['hubspot']['deal_updated'] = True
+                                    logger.info(f"Successfully updated deal {note_deal_id}")
+                                else:
+                                    results['hubspot']['deal_update_error'] = deal_update_result['error']
+                                    logger.warning(f"Failed to update deal {note_deal_id}: {deal_update_result['error']}")
+                        except Exception as deal_update_error:
+                            logger.error(f"Error updating deal: {str(deal_update_error)}", exc_info=True)
+                            results['hubspot']['deal_update_error'] = str(deal_update_error)
                 else:
                     results['hubspot']['error'] = note_result['error']
                     results['errors'].append(f"HubSpot note failed: {note_result['error']}")

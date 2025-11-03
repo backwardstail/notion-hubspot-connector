@@ -162,6 +162,58 @@
                         </div>
                     </div>
 
+                    <!-- Section 1.75: Deal Search (Standalone) -->
+                    <div id="deal-search-card" class="preview-card">
+                        <h3>💼 Deal Search</h3>
+                        <p class="info-text-small">Search for any deal in HubSpot by name or company:</p>
+
+                        <!-- Deal search form -->
+                        <div class="deal-search-form">
+                            <input type="text" id="deal-search-input" placeholder="Enter deal name or company...">
+                            <button id="search-deals-btn" class="btn btn-small btn-primary" type="button">Search</button>
+                            <span id="deal-search-status" class="status-text"></span>
+
+                            <!-- Search results -->
+                            <div id="deal-search-results" class="deal-search-results hidden">
+                                <p class="info-text-small">Select a deal from the results:</p>
+                                <select id="deal-search-dropdown" class="deal-dropdown">
+                                    <option value="">Select a deal...</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Deal Details/Editor -->
+                        <div id="deal-details" class="deal-details hidden">
+                            <h4>Deal Details</h4>
+                            <div class="deal-fields">
+                                <div class="form-group">
+                                    <label for="deal-stage">Deal Stage:</label>
+                                    <select id="deal-stage" class="deal-field-input">
+                                        <option value="">Select a stage...</option>
+                                        <option value="appointmentscheduled">1. New Lead (Sales Pipeline)</option>
+                                        <option value="qualifiedtobuy">2. Reviewing Teaser / Executing NDA (Sales Pipeline)</option>
+                                        <option value="presentationscheduled">3. Reviewing Data / NDA Signed (Sales Pipeline)</option>
+                                        <option value="decisionmakerboughtin">4. IOI Issued / Deep Dive Analysis (Sales Pipeline)</option>
+                                        <option value="contractsent">5. LOI Issued (Sales Pipeline)</option>
+                                        <option value="1110891580">6. LOI Signed (Sales Pipeline)</option>
+                                        <option value="closedwon">7. Closed Won (Sales Pipeline)</option>
+                                        <option value="closedlost">8. Closed Lost (Sales Pipeline)</option>
+                                        <option value="1173780286">9. Closed Declined (Sales Pipeline)</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="deal-next-step">Next Step:</label>
+                                    <input type="text" id="deal-next-step" class="deal-field-input" placeholder="e.g., Send pitch deck">
+                                </div>
+                                <div class="form-group">
+                                    <label for="deal-next-step-date">Next Step Date:</label>
+                                    <input type="date" id="deal-next-step-date" class="deal-field-input">
+                                </div>
+                            </div>
+                            <p class="info-text-small">💡 These fields will be updated in HubSpot when you submit.</p>
+                        </div>
+                    </div>
+
                     <!-- Section 2: Call Summary -->
                     <div class="preview-card">
                         <h3>📝 Call Summary</h3>
@@ -266,8 +318,11 @@
                                         <table id="todos-table" class="todos-table">
                                             <thead>
                                                 <tr>
+                                                    <th style="width: 50px;">
+                                                        <input type="checkbox" id="select-all-todos" checked title="Select/deselect all tasks">
+                                                    </th>
                                                     <th>Task Name</th>
-                                                    <th>Due Date</th>
+                                                    <th style="width: 140px;">Due Date</th>
                                                     <th>Next Step</th>
                                                 </tr>
                                             </thead>
