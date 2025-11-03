@@ -286,10 +286,10 @@ def create_hubspot_contact(email, firstname, lastname, company, api_key):
 
 def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key, deal_id=None):
     """
-    Log a note to a HubSpot contact, optionally associating it with a deal
+    Log a note to a HubSpot contact and/or deal
 
     Args:
-        contact_id (str): HubSpot contact ID
+        contact_id (str, optional): HubSpot contact ID (can be None if only logging to deal)
         summary_html (str): Summary text (will be converted to HTML with bullets)
         full_notes_html (str): Full notes text (will be converted to HTML)
         api_key (str): HubSpot API key
@@ -301,6 +301,8 @@ def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key, deal_id
             'data': dict with 'id' key containing the created note's ID
             'error': str (if success is False)
         }
+
+    Note: At least one of contact_id or deal_id must be provided.
     """
     try:
         url = f"{HUBSPOT_API_BASE}/crm/v3/objects/notes"
@@ -325,9 +327,12 @@ def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key, deal_id
         # Get current timestamp in UTC milliseconds
         timestamp = int(datetime.utcnow().timestamp() * 1000)
 
-        # Build associations list - always include contact
-        associations = [
-            {
+        # Build associations list
+        associations = []
+
+        # Add contact association if contact_id is provided
+        if contact_id:
+            associations.append({
                 "to": {
                     "id": contact_id
                 },
@@ -337,8 +342,7 @@ def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key, deal_id
                         "associationTypeId": 202  # Note to Contact association
                     }
                 ]
-            }
-        ]
+            })
 
         # Add deal association if deal_id is provided
         if deal_id:
@@ -354,6 +358,14 @@ def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key, deal_id
                 ]
             })
 
+        # Ensure at least one association exists
+        if not associations:
+            return {
+                'success': False,
+                'data': None,
+                'error': 'At least one of contact_id or deal_id must be provided'
+            }
+
         payload = {
             "properties": {
                 "hs_note_body": note_body,
@@ -362,7 +374,9 @@ def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key, deal_id
             "associations": associations
         }
 
-        log_msg = f"Creating note for contact ID: {contact_id}"
+        log_msg = "Creating note"
+        if contact_id:
+            log_msg += f" for contact ID: {contact_id}"
         if deal_id:
             log_msg += f" and deal ID: {deal_id}"
         logger.info(log_msg)
@@ -444,7 +458,7 @@ def get_contact_deals(contact_id, api_key):
             # Fetch deal details with specific properties
             deal_url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/{deal_id}"
             params = {
-                'properties': 'dealname,amount,dealstage'
+                'properties': 'dealname,amount,dealstage,hs_next_step,next_steps_date'
             }
 
             logger.info(f"Fetching details for deal ID: {deal_id}")
@@ -458,7 +472,9 @@ def get_contact_deals(contact_id, api_key):
                     'id': deal_id,
                     'name': properties.get('dealname', ''),
                     'amount': properties.get('amount', ''),
-                    'stage': properties.get('dealstage', '')
+                    'stage': properties.get('dealstage', ''),
+                    'next_step': properties.get('hs_next_step', ''),
+                    'next_step_date': properties.get('next_steps_date', '')
                 })
                 logger.info(f"Successfully fetched deal: {properties.get('dealname', 'Unnamed')}")
             else:
@@ -470,3 +486,120 @@ def get_contact_deals(contact_id, api_key):
     except Exception as e:
         logger.error(f"Error fetching contact deals: {str(e)}", exc_info=True)
         return []
+
+
+def search_hubspot_deals(query, api_key):
+    """
+    Search for deals in HubSpot by name or company
+
+    Args:
+        query (str): Search term to find deals
+        api_key (str): HubSpot API key
+
+    Returns:
+        list: List of deal dicts with format:
+            [{"id": "123", "name": "Acme Series A", "amount": "5000000", "stage": "negotiation"}]
+            Returns empty list if no deals found or if an error occurs
+    """
+    try:
+        # Use HubSpot CRM search API
+        search_url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/search"
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+
+        # Search by deal name
+        payload = {
+            "filterGroups": [{
+                "filters": [{
+                    "propertyName": "dealname",
+                    "operator": "CONTAINS_TOKEN",
+                    "value": query
+                }]
+            }],
+            "properties": ["dealname", "amount", "dealstage", "hs_next_step", "next_steps_date"],
+            "limit": 100
+        }
+
+        logger.info(f"Searching HubSpot deals for query: {query}")
+        response = requests.post(search_url, headers=headers, json=payload)
+
+        if response.status_code != 200:
+            logger.error(f"Error searching deals: {response.status_code} - {response.text}")
+            return []
+
+        data = response.json()
+        results = data.get('results', [])
+
+        deals = []
+        for deal in results:
+            properties = deal.get('properties', {})
+            deals.append({
+                'id': deal.get('id'),
+                'name': properties.get('dealname', 'Unnamed Deal'),
+                'amount': properties.get('amount', '0'),
+                'stage': properties.get('dealstage', 'Unknown'),
+                'next_step': properties.get('hs_next_step', ''),
+                'next_step_date': properties.get('next_steps_date', '')
+            })
+
+        logger.info(f"Found {len(deals)} deals matching '{query}'")
+        return deals
+
+    except Exception as e:
+        logger.error(f"Error searching deals: {str(e)}", exc_info=True)
+        return []
+
+
+def update_hubspot_deal(deal_id, properties, api_key):
+    """
+    Update properties of a HubSpot deal
+
+    Args:
+        deal_id (str): HubSpot deal ID
+        properties (dict): Properties to update (e.g., {"dealstage": "closedwon", "hs_next_step": "Follow up"})
+        api_key (str): HubSpot API key
+
+    Returns:
+        dict: {'success': bool, 'data': deal_data or None, 'error': error_message or None}
+    """
+    try:
+        update_url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/{deal_id}"
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+
+        payload = {
+            "properties": properties
+        }
+
+        logger.info(f"Updating deal {deal_id} with properties: {properties}")
+        response = requests.patch(update_url, headers=headers, json=payload)
+
+        if response.status_code == 200:
+            deal_data = response.json()
+            logger.info(f"Successfully updated deal {deal_id}")
+            return {
+                'success': True,
+                'data': deal_data,
+                'error': None
+            }
+        else:
+            error_msg = f"Failed to update deal: {response.status_code} - {response.text}"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'data': None,
+                'error': error_msg
+            }
+
+    except Exception as e:
+        error_msg = f"Error updating deal: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {
+            'success': False,
+            'data': None,
+            'error': error_msg
+        }

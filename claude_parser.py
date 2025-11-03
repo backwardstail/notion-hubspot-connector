@@ -118,11 +118,15 @@ def parse_meeting_notes(notes_text, api_key):
    - Contact person name
    - Email (if mentioned)
 
-2. CALL SUMMARY:
+2. DEAL INFORMATION (if mentioned):
+   - Deal name or company name (e.g., "Acme Corp Acquisition", "TechCo Series A")
+   - Any keywords that would help identify the deal in a search
+
+3. CALL SUMMARY:
    - Create bullet points (3-7 bullets) summarizing key discussion points
    - Mark any action items inline with [TO-DO] prefix
 
-3. INVESTOR PREFERENCES (only extract if explicitly mentioned):
+4. INVESTOR PREFERENCES (only extract if explicitly mentioned):
    Extract ONLY from these allowed values:
    - Check Size: $50M+, $25M - $50M, $10M - $25M, $5M - $10M, $2M - $5M, $1M - $2M, $500 - $1M, <$500k
    - Deal Structure: Flexible, Structured Equity, Debt, Non-Control Equity, Control Equity
@@ -135,7 +139,7 @@ def parse_meeting_notes(notes_text, api_key):
 
    Also extract free-form preference notes for any preferences that don't fit the dropdowns.
 
-4. TO-DO ITEMS:
+5. TO-DO ITEMS:
    For each action item, create:
    - Task Name: ≤25 words, clear and specific
    - Due Date: tomorrow's date (YYYY-MM-DD format)
@@ -144,6 +148,7 @@ def parse_meeting_notes(notes_text, api_key):
 Return ONLY valid JSON with this structure:
 {{
   "contact": {{"company_name": "", "person_name": "", "email": ""}},
+  "deal": {{"deal_name": "", "search_keywords": ""}},
   "summary": ["bullet 1", "bullet 2"],
   "preferences": {{
     "Check Size": [],
@@ -231,6 +236,7 @@ MEETING NOTES:
         # Validate and structure the data
         structured_data = {
             'contact': parsed_data.get('contact', {}),
+            'deal': parsed_data.get('deal', {}),
             'summary': parsed_data.get('summary', []),
             'preferences': {},
             'todos': []
