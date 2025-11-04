@@ -2032,8 +2032,791 @@ function escapeHtml(text) {
     return String(text).replace(/[&<>"']/g, m => map[m]);
 }
 
+/**
+ * Tab switching function
+ */
+function switchTab(tabName) {
+    // Hide all tab content sections
+    document.querySelectorAll('.tab-content').forEach(el => {
+        el.style.display = 'none';
+    });
+
+    // Remove active class from all tab buttons
+    document.querySelectorAll('.tab-btn').forEach(el => {
+        el.classList.remove('active');
+    });
+
+    // Show selected tab and mark button as active
+    if (tabName === 'process') {
+        document.getElementById('process-notes-section').style.display = 'block';
+        document.getElementById('tab-process').classList.add('active');
+    } else if (tabName === 'prepare') {
+        document.getElementById('prepare-call-section').style.display = 'block';
+        document.getElementById('tab-prepare').classList.add('active');
+
+        // Load recent contacts only once when first switching to prepare tab
+        if (!prepRecentContactsLoaded) {
+            loadPrepRecentContacts();
+            prepRecentContactsLoaded = true;
+        }
+    }
+}
+
+// ============================================================================
+// CALL PREPARATION SECTION
+// ============================================================================
+
+// DOM elements for Call Preparation
+const prepSearchInput = document.getElementById('prep-search-input');
+const prepSearchBtn = document.getElementById('prep-search-btn');
+const prepSearchSection = document.getElementById('prep-search-section');
+const prepLoadingSection = document.getElementById('prep-loading-section');
+const prepErrorSection = document.getElementById('prep-error-section');
+const prepBriefSection = document.getElementById('prep-brief-section');
+const prepErrorMessage = document.getElementById('prep-error-message');
+const prepRetryBtn = document.getElementById('prep-retry-btn');
+const prepBackToSearchBtn = document.getElementById('prep-back-to-search-btn');
+const prepRecentContacts = document.getElementById('prep-recent-contacts');
+const prepRecentContactsGrid = document.getElementById('prep-recent-contacts-grid');
+
+// State for call preparation
+let prepLastSearchQuery = '';
+let prepRecentContactsList = [];
+let prepSearchInProgress = false;
+let prepRecentContactsLoaded = false;
+let prepLoadingInterval = null;
+let prepCurrentBriefData = null;
+
+/**
+ * Show specific preparation section and hide others
+ */
+function showPrepSection(sectionName) {
+    prepSearchSection.classList.add('hidden');
+    prepLoadingSection.classList.add('hidden');
+    prepErrorSection.classList.add('hidden');
+    prepBriefSection.classList.add('hidden');
+
+    switch (sectionName) {
+        case 'search':
+            prepSearchSection.classList.remove('hidden');
+            break;
+        case 'loading':
+            prepLoadingSection.classList.remove('hidden');
+            break;
+        case 'error':
+            prepErrorSection.classList.remove('hidden');
+            break;
+        case 'brief':
+            prepBriefSection.classList.remove('hidden');
+            break;
+    }
+}
+
+/**
+ * Update progress step status
+ */
+function updatePrepProgressStep(stepId, status) {
+    const step = document.getElementById(stepId);
+    if (!step) return;
+
+    step.classList.remove('pending', 'in-progress', 'completed');
+    step.classList.add(status);
+
+    const icon = step.querySelector('.prep-progress-icon');
+    if (icon) {
+        icon.classList.remove('pending', 'completed');
+        if (status === 'completed') {
+            icon.classList.add('completed');
+            icon.textContent = '';
+        } else if (status === 'in-progress') {
+            icon.textContent = '⏳';
+        } else {
+            icon.classList.add('pending');
+            icon.textContent = '⏳';
+        }
+    }
+}
+
+/**
+ * Reset all progress steps to pending
+ */
+function resetLoadingSteps() {
+    const steps = ['prep-step-hubspot', 'prep-step-web', 'prep-step-preferences',
+                   'prep-step-interactions', 'prep-step-ai'];
+    steps.forEach(stepId => updatePrepProgressStep(stepId, 'pending'));
+
+    // Clear any existing loading interval
+    if (prepLoadingInterval) {
+        clearInterval(prepLoadingInterval);
+        prepLoadingInterval = null;
+    }
+}
+
+/**
+ * Complete a specific loading step
+ */
+function completeLoadingStep(stepId) {
+    updatePrepProgressStep(stepId, 'completed');
+}
+
+/**
+ * Simulate progressive loading by completing steps at intervals
+ */
+function simulateProgressiveLoading() {
+    const steps = [
+        'prep-step-hubspot',
+        'prep-step-web',
+        'prep-step-preferences',
+        'prep-step-interactions',
+        'prep-step-ai'
+    ];
+
+    let currentStep = 0;
+
+    // Clear any existing interval
+    if (prepLoadingInterval) {
+        clearInterval(prepLoadingInterval);
+    }
+
+    // Complete steps every ~1 second
+    prepLoadingInterval = setInterval(() => {
+        if (currentStep < steps.length) {
+            completeLoadingStep(steps[currentStep]);
+            currentStep++;
+        } else {
+            clearInterval(prepLoadingInterval);
+            prepLoadingInterval = null;
+        }
+    }, 1000);
+}
+
+/**
+ * Main search function for call preparation
+ */
+async function searchContactForPrep() {
+    const query = prepSearchInput.value.trim();
+
+    // Validate query
+    if (!query) {
+        alert('Please enter a contact name or email');
+        return;
+    }
+
+    // Edge case: Validate query length (prevent excessively long queries)
+    if (query.length > 200) {
+        alert('Search query is too long. Please enter a shorter name or email.');
+        return;
+    }
+
+    // Prevent double submission
+    if (prepSearchInProgress) {
+        console.log('Search already in progress');
+        return;
+    }
+
+    prepLastSearchQuery = query;
+    prepSearchInProgress = true;
+
+    // Clear previous results and errors
+    prepCurrentBriefData = null;
+
+    // Show loading section and reset progress
+    showPrepSection('loading');
+    resetLoadingSteps();
+
+    // Start simulated progressive loading
+    simulateProgressiveLoading();
+
+    // Disable search button
+    if (prepSearchBtn) {
+        prepSearchBtn.disabled = true;
+    }
+
+    try {
+        // Call the API endpoint
+        const response = await fetch('/api/prepare-call', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ query: query })
+        });
+
+        // Clear the loading interval
+        if (prepLoadingInterval) {
+            clearInterval(prepLoadingInterval);
+            prepLoadingInterval = null;
+        }
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: 'Unknown error occurred' }));
+            throw new Error(errorData.error || `Server error: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        // Check if the response was successful
+        if (!data.success) {
+            throw new Error(data.error || 'Failed to prepare call brief');
+        }
+
+        // Extract the brief object from the response
+        const brief = data.brief;
+
+        // Store the brief data
+        prepCurrentBriefData = brief;
+
+        // Complete all steps
+        const steps = ['prep-step-hubspot', 'prep-step-web', 'prep-step-preferences',
+                       'prep-step-interactions', 'prep-step-ai'];
+        steps.forEach(stepId => completeLoadingStep(stepId));
+
+        // Update recent contacts list
+        if (brief.contact) {
+            savePrepRecentContact({
+                id: brief.contact.id || brief.contact.email,
+                name: brief.contact.name || query,
+                email: brief.contact.email || '',
+                company: brief.contact.company || ''
+            });
+        }
+
+        // Show brief after a short delay
+        setTimeout(() => {
+            displayBrief(brief);
+            showPrepSection('brief');
+        }, 500);
+
+    } catch (error) {
+        console.error('Error searching for contact:', error);
+
+        // Clear the loading interval
+        if (prepLoadingInterval) {
+            clearInterval(prepLoadingInterval);
+            prepLoadingInterval = null;
+        }
+
+        // Show error
+        showError(error.message || 'Failed to prepare call brief. Please try again.');
+    } finally {
+        prepSearchInProgress = false;
+
+        // Re-enable search button
+        if (prepSearchBtn) {
+            prepSearchBtn.disabled = false;
+        }
+    }
+}
+
+/**
+ * Get initials from name
+ */
+function getInitials(name) {
+    if (!name) return '??';
+
+    // Edge case: If name is an email, extract the part before @
+    if (name.includes('@')) {
+        name = name.split('@')[0];
+    }
+
+    // Edge case: Remove special characters and numbers
+    name = name.replace(/[^a-zA-Z\s]/g, '').trim();
+
+    if (!name) return '??';
+
+    const parts = name.split(/\s+/).filter(p => p.length > 0);
+    if (parts.length >= 2) {
+        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+    return name.substring(0, 2).toUpperCase();
+}
+
+/**
+ * Convert markdown-style text to HTML
+ */
+function markdownToHtml(text) {
+    if (!text) return '';
+
+    let html = text;
+
+    // Convert **bold** to <strong>
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+    // Convert bullet points (- ) to HTML bullets
+    html = html.replace(/^- (.+)$/gm, '• $1');
+
+    // Convert newlines to <br> tags
+    html = html.replace(/\n/g, '<br>');
+
+    return html;
+}
+
+/**
+ * Show notification
+ */
+function showNotification(message, type = 'info') {
+    // Remove any existing notifications
+    const existing = document.querySelectorAll('.prep-notification');
+    existing.forEach(n => n.remove());
+
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.className = `prep-notification prep-notification-${type}`;
+    notification.textContent = message;
+
+    // Add to document
+    document.body.appendChild(notification);
+
+    // Trigger animation
+    setTimeout(() => {
+        notification.classList.add('show');
+    }, 10);
+
+    // Auto-dismiss after 3 seconds
+    setTimeout(() => {
+        notification.classList.remove('show');
+        setTimeout(() => {
+            notification.remove();
+        }, 300);
+    }, 3000);
+}
+
+/**
+ * Copy brief to clipboard
+ */
+async function copyBriefToClipboard() {
+    try {
+        const contact = prepCurrentBriefData?.contact || {};
+        const briefText = prepCurrentBriefData?.brief_text || '';
+
+        // Build text to copy
+        const textToCopy = `Call Brief: ${contact.name || 'Unknown Contact'}\n\n${briefText}`;
+
+        // Copy to clipboard
+        await navigator.clipboard.writeText(textToCopy);
+
+        showNotification('Brief copied to clipboard!', 'success');
+    } catch (error) {
+        console.error('Error copying to clipboard:', error);
+        showNotification('Failed to copy brief', 'error');
+    }
+}
+
+/**
+ * Save brief to HubSpot
+ */
+function saveBriefToHubSpot() {
+    // TODO: Implement saving to HubSpot
+    showNotification('Feature coming soon!', 'info');
+}
+
+/**
+ * Toggle raw data display
+ */
+function toggleRawData() {
+    const rawDataSection = document.getElementById('prep-raw-data-section');
+    if (rawDataSection) {
+        const isHidden = rawDataSection.style.display === 'none';
+        rawDataSection.style.display = isHidden ? 'block' : 'none';
+
+        // Update button text
+        const btn = document.getElementById('prep-toggle-raw-btn');
+        if (btn) {
+            btn.textContent = isHidden ? '🔼 Hide Raw Data' : '🔍 View Raw Data';
+        }
+    }
+}
+
+/**
+ * Display the brief in the UI
+ */
+function displayCallBrief(data) {
+    const container = document.querySelector('.prep-brief-container');
+    if (!container) return;
+
+    const contact = data.contact || {};
+    const briefText = data.brief_text || '';
+    const rawData = data.raw_data || {};
+
+    // Edge case: Handle missing contact name
+    const contactName = contact.name || contact.email || 'Unknown Contact';
+
+    // Get initials for avatar
+    const initials = getInitials(contactName);
+
+    // Convert markdown to HTML
+    const briefHtml = markdownToHtml(briefText);
+
+    // Edge case: Build job title line, handling missing fields gracefully
+    let titleLine = '';
+    if (contact.jobtitle && contact.company) {
+        titleLine = `${escapeHtml(contact.jobtitle)} at <span class="prep-brief-company">🏢 ${escapeHtml(contact.company)}</span>`;
+    } else if (contact.jobtitle) {
+        titleLine = escapeHtml(contact.jobtitle);
+    } else if (contact.company) {
+        titleLine = `<span class="prep-brief-company">🏢 ${escapeHtml(contact.company)}</span>`;
+    } else {
+        titleLine = '<span class="prep-brief-no-info">No company information available</span>';
+    }
+
+    // Build HTML
+    container.innerHTML = `
+        <div class="prep-brief-card">
+            <!-- Header -->
+            <div class="prep-brief-header">
+                <div class="prep-brief-avatar">${initials}</div>
+                <div class="prep-brief-header-info">
+                    <h2 class="prep-brief-contact-name" title="${escapeHtml(contactName)}">${escapeHtml(contactName)}</h2>
+                    <p class="prep-brief-contact-title">
+                        ${titleLine}
+                    </p>
+                    <div class="prep-brief-contact-details">
+                        ${contact.email ? '<span class="prep-brief-detail">📧 ' + escapeHtml(contact.email) + '</span>' : '<span class="prep-brief-no-info">No email available</span>'}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Brief Content -->
+            <div class="prep-brief-content">
+                ${briefHtml || '<p class="prep-brief-no-info">No brief content available. This may happen if there is limited data about this contact.</p>'}
+            </div>
+
+            <!-- Footer -->
+            <div class="prep-brief-footer">
+                <span class="prep-brief-timestamp">Generated ${new Date().toLocaleString()}</span>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="prep-brief-actions">
+                <button id="prep-copy-brief-btn" class="btn btn-primary prep-action-btn">
+                    📋 Copy Brief
+                </button>
+                <button id="prep-save-hubspot-btn" class="btn btn-secondary prep-action-btn">
+                    💾 Save to HubSpot
+                </button>
+                <button id="prep-toggle-raw-btn" class="btn btn-secondary prep-action-btn">
+                    🔍 View Raw Data
+                </button>
+            </div>
+
+            <!-- Raw Data Section (hidden by default) -->
+            <div id="prep-raw-data-section" class="prep-raw-data-section" style="display: none;">
+                <h3>Raw Data Sources</h3>
+
+                <details class="prep-raw-details">
+                    <summary>Recent Interactions (${rawData.recent_notes?.length || 0})</summary>
+                    <pre class="prep-raw-pre">${escapeHtml(JSON.stringify(rawData.recent_notes || [], null, 2))}</pre>
+                </details>
+
+                <details class="prep-raw-details">
+                    <summary>Investor Preferences</summary>
+                    <pre class="prep-raw-pre">${escapeHtml(JSON.stringify(rawData.investor_prefs || null, null, 2))}</pre>
+                </details>
+
+                <details class="prep-raw-details">
+                    <summary>Web Findings</summary>
+                    <pre class="prep-raw-pre">${escapeHtml(JSON.stringify(rawData.web_findings || {}, null, 2))}</pre>
+                </details>
+            </div>
+
+            <!-- New Search Button -->
+            <div class="button-group" style="margin-top: 30px;">
+                <button id="prep-new-search-btn" class="btn btn-primary">🔍 New Search</button>
+            </div>
+        </div>
+    `;
+
+    // Add event listeners
+    const copyBtn = document.getElementById('prep-copy-brief-btn');
+    if (copyBtn) {
+        copyBtn.addEventListener('click', copyBriefToClipboard);
+    }
+
+    const saveBtn = document.getElementById('prep-save-hubspot-btn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', saveBriefToHubSpot);
+    }
+
+    const toggleBtn = document.getElementById('prep-toggle-raw-btn');
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', toggleRawData);
+    }
+
+    const newSearchBtn = document.getElementById('prep-new-search-btn');
+    if (newSearchBtn) {
+        newSearchBtn.addEventListener('click', handlePrepBackToSearch);
+    }
+}
+
+/**
+ * Alias for displayCallBrief
+ */
+function displayBrief(data) {
+    displayCallBrief(data);
+}
+
+/**
+ * Show error in preparation section
+ */
+function showError(message) {
+    const helpfulMessage = getHelpfulErrorMessage(message);
+    prepErrorMessage.textContent = helpfulMessage;
+    prepErrorMessage.style.whiteSpace = 'pre-line'; // Allow newlines in error messages
+    showPrepSection('error');
+}
+
+/**
+ * Alias for backward compatibility
+ */
+function handlePrepSearch() {
+    searchContactForPrep();
+}
+
+/**
+ * Handle retry from error
+ */
+function retrySearch() {
+    if (prepLastSearchQuery) {
+        prepSearchInput.value = prepLastSearchQuery;
+        searchContactForPrep();
+    } else {
+        showPrepSection('search');
+    }
+}
+
+/**
+ * Alias for backward compatibility
+ */
+function handlePrepRetry() {
+    retrySearch();
+}
+
+/**
+ * Handle back to search
+ */
+function handlePrepBackToSearch() {
+    showPrepSection('search');
+    prepSearchInput.value = '';
+    prepSearchInput.focus();
+}
+
+/**
+ * Select a recent contact and trigger search
+ */
+function selectRecentContact(contactId, contactName, contactEmail) {
+    prepSearchInput.value = contactEmail || contactName;
+    searchContactForPrep();
+}
+
+/**
+ * Load recent contacts from localStorage
+ */
+function loadPrepRecentContacts() {
+    try {
+        const stored = localStorage.getItem('prep_recent_contacts');
+        if (stored) {
+            prepRecentContactsList = JSON.parse(stored);
+            renderPrepRecentContacts();
+        }
+    } catch (e) {
+        console.error('Error loading recent contacts:', e);
+    }
+}
+
+/**
+ * Update recent contacts list (can be called to refresh from API if needed)
+ */
+async function updateRecentContactsList() {
+    try {
+        // For now, we're using localStorage only
+        // If you want to fetch from API:
+        // const response = await fetch('/api/recent-contacts');
+        // const data = await response.json();
+        // prepRecentContactsList = data.contacts || [];
+        // localStorage.setItem('prep_recent_contacts', JSON.stringify(prepRecentContactsList));
+
+        renderPrepRecentContacts();
+    } catch (e) {
+        console.error('Error updating recent contacts:', e);
+    }
+}
+
+/**
+ * Save recent contacts to localStorage
+ */
+function savePrepRecentContact(contact) {
+    // Add to beginning of list
+    prepRecentContactsList.unshift(contact);
+
+    // Remove duplicates (by email or id)
+    prepRecentContactsList = prepRecentContactsList.filter((item, index, self) =>
+        index === self.findIndex((t) => (
+            t.email === item.email || t.id === item.id
+        ))
+    );
+
+    // Keep only last 6 contacts
+    prepRecentContactsList = prepRecentContactsList.slice(0, 6);
+
+    // Save to localStorage
+    localStorage.setItem('prep_recent_contacts', JSON.stringify(prepRecentContactsList));
+
+    // Re-render
+    renderPrepRecentContacts();
+}
+
+/**
+ * Render recent contacts
+ */
+function renderPrepRecentContacts() {
+    if (!prepRecentContactsGrid) return;
+
+    if (prepRecentContactsList.length === 0) {
+        if (prepRecentContacts) {
+            prepRecentContacts.classList.add('hidden');
+        }
+        return;
+    }
+
+    if (prepRecentContacts) {
+        prepRecentContacts.classList.remove('hidden');
+    }
+
+    prepRecentContactsGrid.innerHTML = '';
+
+    prepRecentContactsList.forEach(contact => {
+        const card = document.createElement('div');
+        card.className = 'prep-recent-card';
+        card.innerHTML = `
+            <div class="prep-recent-card-name">${escapeHtml(contact.name)}</div>
+            <div class="prep-recent-card-company">${escapeHtml(contact.company || 'No company')}</div>
+        `;
+        card.addEventListener('click', () => {
+            selectRecentContact(contact.id, contact.name, contact.email);
+        });
+        prepRecentContactsGrid.appendChild(card);
+    });
+}
+
+/**
+ * Check and show first-time user hint
+ */
+function checkAndShowFirstTimeHint() {
+    const hasSeenHint = localStorage.getItem('prep_has_seen_hint');
+
+    if (!hasSeenHint && prepSearchSection) {
+        // Create hint element
+        const hint = document.createElement('div');
+        hint.className = 'prep-first-time-hint';
+        hint.innerHTML = `
+            <div class="prep-hint-content">
+                <h3>✨ Welcome to Call Preparation!</h3>
+                <p>Generate AI-powered call briefs in seconds. We'll gather:</p>
+                <ul>
+                    <li>📝 Recent interaction history from HubSpot</li>
+                    <li>💼 Investment preferences from your database</li>
+                    <li>🤖 AI-synthesized talking points and context</li>
+                </ul>
+                <p class="prep-hint-tip"><strong>Tip:</strong> Press <kbd>Cmd/Ctrl + K</kbd> to quickly focus the search box</p>
+                <button id="prep-dismiss-hint" class="btn btn-primary">Got it!</button>
+            </div>
+        `;
+
+        // Insert after search box
+        const searchBox = document.querySelector('.prep-search-box');
+        if (searchBox && searchBox.parentNode) {
+            searchBox.parentNode.insertBefore(hint, searchBox.nextSibling);
+
+            // Add dismiss handler
+            const dismissBtn = document.getElementById('prep-dismiss-hint');
+            if (dismissBtn) {
+                dismissBtn.addEventListener('click', () => {
+                    hint.remove();
+                    localStorage.setItem('prep_has_seen_hint', 'true');
+                });
+            }
+        }
+    }
+}
+
+/**
+ * Improve error message with suggestions
+ */
+function getHelpfulErrorMessage(error) {
+    const errorLower = error.toLowerCase();
+
+    if (errorLower.includes('contact not found')) {
+        return `${error}\n\n💡 Suggestions:\n• Try searching by email instead of name\n• Check the spelling of the name\n• Make sure the contact exists in HubSpot`;
+    }
+
+    if (errorLower.includes('network') || errorLower.includes('timeout') || errorLower.includes('fetch')) {
+        return `${error}\n\n💡 Please check your internet connection and try again.`;
+    }
+
+    if (errorLower.includes('api') || errorLower.includes('key')) {
+        return `${error}\n\n💡 There may be an issue with API configuration. Please contact support.`;
+    }
+
+    return error;
+}
+
+// Event listeners for Call Preparation
+if (prepSearchBtn) {
+    prepSearchBtn.addEventListener('click', handlePrepSearch);
+}
+
+if (prepSearchInput) {
+    prepSearchInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            handlePrepSearch();
+        }
+    });
+}
+
+if (prepRetryBtn) {
+    prepRetryBtn.addEventListener('click', handlePrepRetry);
+}
+
+if (prepBackToSearchBtn) {
+    prepBackToSearchBtn.addEventListener('click', handlePrepBackToSearch);
+}
+
+// Global keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+    // Cmd/Ctrl + K: Focus search input (only in prepare tab)
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        const prepareTab = document.getElementById('prepare-call-section');
+        if (prepareTab && prepareTab.style.display !== 'none') {
+            e.preventDefault();
+            if (prepSearchInput) {
+                prepSearchInput.focus();
+                prepSearchInput.select();
+            }
+        }
+    }
+
+    // Escape: Clear results and focus search (only in prepare tab)
+    if (e.key === 'Escape') {
+        const prepareTab = document.getElementById('prepare-call-section');
+        if (prepareTab && prepareTab.style.display !== 'none') {
+            const briefSection = document.getElementById('prep-brief-section');
+            const searchSection = document.getElementById('prep-search-section');
+
+            if (briefSection && !briefSection.classList.contains('hidden')) {
+                e.preventDefault();
+                handlePrepBackToSearch();
+            }
+        }
+    }
+});
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Investor Call Notes Processor initialized');
     notesInput.focus();
+
+    // Note: Recent contacts will be loaded when user switches to prepare tab
+
+    // Show first-time user hint if needed
+    checkAndShowFirstTimeHint();
 });
