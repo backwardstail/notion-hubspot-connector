@@ -15,8 +15,9 @@ All through a simple web interface with preview and confirmation workflow.
 ## Features
 
 ✅ **AI-Powered Parsing** - Claude Sonnet 4.5 extracts contact info, preferences, and action items
+✅ **Call Preparation** - Generate AI-powered briefs before investor calls with recent notes and preferences (NEW)
 ✅ **HubSpot Integration** - Search contacts, create new ones, log detailed notes
-✅ **Deal Association** - Associate notes with specific deals in HubSpot pipeline (NEW)
+✅ **Deal Association** - Associate notes with specific deals in HubSpot pipeline
 ✅ **Flexible Action Selection** - Choose which actions to perform (HubSpot, Notion, or both)
 ✅ **Notion Data Sources API** - Update investor preferences and create todos using Notion API v2025-09-03
 ✅ **Smart Contact Matching** - Try email first, then name, with multiple match selection
@@ -24,6 +25,7 @@ All through a simple web interface with preview and confirmation workflow.
 ✅ **Append-Only Updates** - Multi-select values are merged, notes are appended
 ✅ **Validation** - Comprehensive validation prevents incomplete submissions
 ✅ **Error Handling** - Partial success tracking, detailed error messages, independent action execution
+✅ **Keyboard Shortcuts** - Cmd/Ctrl+K to focus search, Escape to clear, Enter to submit
 
 ## Prerequisites
 
@@ -210,6 +212,79 @@ If any environment variables are missing, warnings will appear in the console.
    - ⊘ Actions that were skipped
    - ⚠️ Any errors with specific guidance
 
+### Call Preparation
+
+The Call Preparation feature helps you quickly generate AI-powered briefs before investor calls.
+
+1. **Switch to "Prepare for Call" Tab**
+   Click the "📞 Prepare for Call" tab in the navigation
+
+2. **Search for Contact**
+   Enter the investor's name or email in the search box. Example:
+   ```
+   John Doe
+   john@acmecapital.com
+   ```
+
+3. **Wait for Brief Generation**
+   The system will automatically:
+   - 🔍 Search HubSpot for the contact
+   - 🌐 Gather web information (placeholder for now)
+   - 📝 Fetch investor preferences from Notion
+   - 💬 Pull recent interactions and notes
+   - 🤖 Synthesize everything into an actionable brief with Claude AI
+
+4. **Review the Brief**
+   The brief includes:
+   - **Quick Context** - Who they are, their role, and focus area
+   - **Recent Activity** - Recent interactions from your records
+   - **Investment Thesis** - Check sizes, stage preferences, industry focus
+   - **Talking Points** - Key points to emphasize on the call
+
+5. **Use the Brief**
+   - **Copy Brief** - Copy the brief text to clipboard
+   - **Save to HubSpot** - Save the brief as a note in HubSpot
+   - **View Raw Data** - Inspect the underlying data sources
+
+#### Keyboard Shortcuts
+
+- **Cmd/Ctrl + K** - Focus the search input
+- **Enter** - Submit search (when input is focused)
+- **Escape** - Clear results and return to search
+
+#### Recent Contacts
+
+The app automatically tracks your 5 most recently searched contacts for quick access.
+
+#### Edge Cases Handled
+
+- Contacts with missing information (no email, no company)
+- Very long names or company names (truncated with ellipsis)
+- Special characters in search queries
+- Contacts with no interaction history
+- Empty brief content (shows helpful message)
+
+#### Troubleshooting Call Preparation
+
+**Error: "Contact not found"**
+- Try searching by email instead of name
+- Check spelling of the name
+- Verify the contact exists in HubSpot
+
+**Error: "Network error"**
+- Check your internet connection
+- Verify all API keys are valid in `.env`
+
+**Error: "Unable to generate brief"**
+- Check `ANTHROPIC_API_KEY` is valid
+- Verify you have credits at console.anthropic.com
+- The feature will show a fallback brief with available data
+
+**Empty or minimal brief content**
+- This is normal for new contacts with limited history
+- The brief will improve as you add more notes and interactions
+- Check the "View Raw Data" section to see what data is available
+
 ## Allowed Dropdown Values
 
 When extracting preferences, Claude will only use these allowed values:
@@ -249,6 +324,10 @@ Any preferences that don't fit these dropdowns will be added to **Preference Not
 - `POST /api/process-notes` - Parse notes with Claude, search HubSpot contact, return preview
 - `POST /api/confirm-and-execute` - Execute all updates (HubSpot note, Notion investor, Notion todos)
 
+### Call Preparation
+- `POST /api/prepare-call` - Search contact and generate AI-powered call brief
+- `GET /api/recent-contacts` - Retrieve 5 most recently modified contacts from HubSpot
+
 ### Helpers
 - `POST /api/create-contact` - Create new HubSpot contact
 - `POST /api/select-contact` - Confirm selected contact from multiple matches
@@ -261,6 +340,7 @@ notion_hubspot_connector/
 ├── hubspot_client.py         # HubSpot API client (search, create, log notes)
 ├── notion_client.py          # Notion API client (search, create, update with append-only)
 ├── claude_parser.py          # Claude API parser for meeting notes
+├── call_preparer.py          # Call preparation module (gather info, synthesize with AI)
 ├── requirements.txt          # Python dependencies
 ├── .env                      # Environment variables (DO NOT COMMIT)
 ├── .env.example              # Template for environment variables
@@ -268,11 +348,11 @@ notion_hubspot_connector/
 ├── README.md                 # This file
 │
 ├── static/
-│   ├── style.css             # Frontend styles (blue accent theme)
-│   └── script.js             # Frontend JavaScript (AJAX, state management)
+│   ├── style.css             # Frontend styles (blue accent theme, call prep UI)
+│   └── script.js             # Frontend JavaScript (AJAX, state management, call prep)
 │
 └── templates/
-    └── index.html            # Main HTML template (4 preview cards)
+    └── index.html            # Main HTML template (tabs, process notes, call prep)
 ```
 
 ### Module Descriptions
@@ -301,6 +381,14 @@ notion_hubspot_connector/
 - JSON parsing and validation
 - Preference value validation
 - Default due date generation
+
+**call_preparer.py** - Call preparation
+- `get_contact_recent_notes()` - Fetch recent HubSpot notes for a contact
+- `web_search_contact()` - Placeholder for web search (returns empty)
+- `get_investor_preferences_by_company()` - Fetch Notion preferences by company name
+- `prepare_call_brief()` - Orchestrate all data gathering
+- `synthesize_brief_with_claude()` - Generate actionable brief using Claude AI
+- `_generate_fallback_brief()` - Fallback brief when Claude is unavailable
 
 ## Troubleshooting
 
@@ -496,7 +584,13 @@ For production deployment:
 
 ## Keyboard Shortcuts
 
+### Process Notes Tab
 - **Ctrl/Cmd + Enter** - Process notes (when textarea is focused)
+
+### Call Preparation Tab
+- **Cmd/Ctrl + K** - Focus the search input
+- **Enter** - Submit search (when input is focused)
+- **Escape** - Clear results and return to search
 
 ## Browser Support
 
@@ -517,6 +611,15 @@ For issues or questions:
 - Contact the development team
 
 ## Changelog
+
+**v1.1.0** - Call Preparation Feature
+- AI-powered call preparation with brief generation
+- Tab-based navigation between Process Notes and Call Preparation
+- Recent contacts tracking
+- Keyboard shortcuts (Cmd/Ctrl+K, Enter, Escape)
+- First-time user hints
+- Comprehensive edge case handling for missing data
+- Improved error messages with helpful suggestions
 
 **v1.0.0** - Initial release
 - Claude AI parsing with Sonnet 4.5

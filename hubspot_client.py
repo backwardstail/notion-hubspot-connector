@@ -47,7 +47,7 @@ def search_hubspot_contact(query, api_key):
                         "value": query
                     }]
                 }],
-                "properties": ["email", "firstname", "lastname", "company"],
+                "properties": ["email", "firstname", "lastname", "company", "jobtitle"],
                 "limit": 10
             }
         else:
@@ -116,7 +116,7 @@ def search_hubspot_contact(query, api_key):
                             }]
                         }
                     ],
-                    "properties": ["email", "firstname", "lastname", "company"],
+                    "properties": ["email", "firstname", "lastname", "company", "jobtitle"],
                     "limit": 10
                 }
             else:
@@ -138,7 +138,7 @@ def search_hubspot_contact(query, api_key):
                             }]
                         }
                     ],
-                    "properties": ["email", "firstname", "lastname", "company"],
+                    "properties": ["email", "firstname", "lastname", "company", "jobtitle"],
                     "limit": 10
                 }
 
@@ -160,7 +160,8 @@ def search_hubspot_contact(query, api_key):
                         'email': props.get('email', ''),
                         'firstname': props.get('firstname', ''),
                         'lastname': props.get('lastname', ''),
-                        'company': props.get('company', '')
+                        'company': props.get('company', ''),
+                        'jobtitle': props.get('jobtitle', '')
                     }
 
             contacts = list(contacts_dict.values())
@@ -458,7 +459,7 @@ def get_contact_deals(contact_id, api_key):
             # Fetch deal details with specific properties
             deal_url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals/{deal_id}"
             params = {
-                'properties': 'dealname,amount,dealstage,hs_next_step,next_steps_date'
+                'properties': 'dealname,amount,dealstage,hs_next_step,next_steps_date,pipeline'
             }
 
             logger.info(f"Fetching details for deal ID: {deal_id}")
@@ -468,11 +469,31 @@ def get_contact_deals(contact_id, api_key):
                 deal_data = deal_response.json()
                 properties = deal_data.get('properties', {})
 
+                # Get stage internal value
+                stage_internal = properties.get('dealstage', '')
+                pipeline = properties.get('pipeline', 'default')
+
+                # Try to get the stage label - we'll fetch this from the pipeline API
+                stage_label = stage_internal  # Default to internal name
+                if stage_internal:
+                    try:
+                        # Fetch pipeline stages to get the label
+                        pipeline_url = f"{HUBSPOT_API_BASE}/crm/v3/pipelines/deals/{pipeline}"
+                        pipeline_response = requests.get(pipeline_url, headers=headers)
+                        if pipeline_response.status_code == 200:
+                            pipeline_data = pipeline_response.json()
+                            for stage in pipeline_data.get('stages', []):
+                                if stage.get('id') == stage_internal:
+                                    stage_label = stage.get('label', stage_internal)
+                                    break
+                    except Exception as e:
+                        logger.warning(f"Could not fetch stage label: {str(e)}")
+
                 deals.append({
                     'id': deal_id,
                     'name': properties.get('dealname', ''),
                     'amount': properties.get('amount', ''),
-                    'stage': properties.get('dealstage', ''),
+                    'stage': stage_label,
                     'next_step': properties.get('hs_next_step', ''),
                     'next_step_date': properties.get('next_steps_date', '')
                 })

@@ -1,5 +1,6 @@
 import os
 import logging
+import requests
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -12,6 +13,7 @@ from notion_client import (
     create_todo_item
 )
 from claude_parser import parse_meeting_notes
+from call_preparer import prepare_call_brief, synthesize_brief_with_claude
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +36,7 @@ HUBSPOT_PORTAL_ID = os.getenv('HUBSPOT_PORTAL_ID')
 NOTION_API_KEY = os.getenv('NOTION_API_KEY')
 NOTION_INVESTOR_PREFS_DB_ID = os.getenv('NOTION_INVESTOR_PREFS_DB_ID')
 NOTION_TODOS_DB_ID = os.getenv('NOTION_TODOS_DB_ID')
+SERPER_API_KEY = os.getenv('SERPER_API_KEY')  # Optional: For web search functionality
 
 
 @app.route('/')
@@ -920,6 +923,163 @@ def build_execution_summary(results):
     return summary
 
 
+@app.route('/api/prepare-call', methods=['POST'])
+def prepare_call():
+    """
+    Prepare a call brief for a contact by gathering and synthesizing information.
+
+    Request body: {"query": "name or email"}
+
+    Returns:
+        JSON with brief data or error message
+    """
+    try:
+        logger.info("=== Prepare Call API called ===")
+
+        # Get request data
+        data = request.get_json()
+        query = data.get('query', '').strip()
+
+        # Validate query
+        if not query:
+            logger.warning("Empty query provided")
+            return jsonify({
+                'success': False,
+                'error': 'Query parameter is required'
+            }), 200
+
+        logger.info(f"Searching for contact: {query}")
+
+        # Step 1: Search HubSpot for contact
+        search_result = search_hubspot_contact(query, HUBSPOT_API_KEY)
+
+        if not search_result.get('success') or not search_result.get('data'):
+            logger.warning(f"Contact not found for query: {query}")
+            return jsonify({
+                'success': False,
+                'error': f'Contact not found for: {query}'
+            }), 200
+
+        # Get the first contact from the data array
+        contact_results = search_result['data']
+        contact = contact_results[0]
+        contact_id = contact.get('id')
+
+        # Extract contact data (flat structure from search_hubspot_contact)
+        contact_data = {
+            'id': contact_id,
+            'name': f"{contact.get('firstname', '')} {contact.get('lastname', '')}".strip(),
+            'email': contact.get('email', ''),
+            'company': contact.get('company', ''),
+            'jobtitle': contact.get('jobtitle', '')
+        }
+
+        logger.info(f"Found contact: {contact_data['name']} (ID: {contact_id})")
+
+        # Step 2: Gather all information
+        logger.info("Gathering information from multiple sources...")
+        brief_data = prepare_call_brief(
+            contact_id=contact_id,
+            contact_data=contact_data,
+            hubspot_api_key=HUBSPOT_API_KEY,
+            serper_api_key=SERPER_API_KEY
+        )
+
+        # Step 3: Synthesize with Claude
+        logger.info("Synthesizing brief with Claude...")
+        synthesized_brief = synthesize_brief_with_claude(
+            data=brief_data,
+            anthropic_api_key=ANTHROPIC_API_KEY
+        )
+
+        logger.info("Successfully prepared call brief")
+
+        return jsonify({
+            'success': True,
+            'brief': synthesized_brief
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error preparing call brief: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f'Failed to prepare call brief: {str(e)}'
+        }), 200
+
+
+@app.route('/api/recent-contacts', methods=['GET'])
+def recent_contacts():
+    """
+    Get recently modified contacts from HubSpot.
+
+    Returns:
+        JSON with list of recent contacts
+    """
+    try:
+        logger.info("=== Recent Contacts API called ===")
+
+        # Call HubSpot API to get recent contacts
+        url = "https://api.hubapi.com/crm/v3/objects/contacts"
+
+        headers = {
+            "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        params = {
+            "limit": 5,
+            "properties": "firstname,lastname,email,company",
+            "sorts": "hs_lastmodifieddate",
+            "archived": "false"
+        }
+
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get("results", [])
+
+            # Format contacts
+            contacts = []
+            for result in results:
+                properties = result.get("properties", {})
+                contact_id = result.get("id")
+
+                firstname = properties.get("firstname", "")
+                lastname = properties.get("lastname", "")
+                name = f"{firstname} {lastname}".strip() or "Unknown"
+
+                contacts.append({
+                    "id": contact_id,
+                    "name": name,
+                    "company": properties.get("company", ""),
+                    "email": properties.get("email", "")
+                })
+
+            logger.info(f"Retrieved {len(contacts)} recent contacts")
+
+            return jsonify({
+                'success': True,
+                'contacts': contacts
+            }), 200
+
+        else:
+            logger.warning(f"HubSpot API error: {response.status_code}")
+            return jsonify({
+                'success': False,
+                'error': f'HubSpot API error: {response.status_code}',
+                'contacts': []
+            }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching recent contacts: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f'Failed to fetch recent contacts: {str(e)}',
+            'contacts': []
+        }), 200
+
+
 if __name__ == '__main__':
     # Verify environment variables are set
     required_vars = [
@@ -936,4 +1096,5 @@ if __name__ == '__main__':
         logger.warning(f"Missing environment variables: {', '.join(missing_vars)}")
         logger.warning("Please copy .env.example to .env and fill in your API keys")
 
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

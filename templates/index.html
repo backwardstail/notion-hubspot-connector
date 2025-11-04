@@ -14,6 +14,18 @@
         </header>
 
         <main>
+            <!-- Tab Navigation -->
+            <div class="tab-navigation">
+                <button class="tab-btn active" id="tab-process" onclick="switchTab('process')">
+                    📝 Process Notes
+                </button>
+                <button class="tab-btn" id="tab-prepare" onclick="switchTab('prepare')">
+                    📞 Prepare for Call
+                </button>
+            </div>
+
+            <!-- Process Notes Section -->
+            <div id="process-notes-section" class="tab-content active">
             <!-- Input Section -->
             <section id="input-section" class="section">
                 <div class="form-group">
@@ -381,6 +393,95 @@
                     <button id="new-notes-btn" class="btn btn-primary">Process New Notes</button>
                 </div>
             </section>
+            </div>
+            <!-- End Process Notes Section -->
+
+            <!-- Prepare for Call Section -->
+            <div id="prepare-call-section" class="tab-content" style="display: none;">
+
+                <!-- Search Section -->
+                <section id="prep-search-section" class="section">
+                    <div class="prep-header">
+                        <h2>📞 Prepare for Call</h2>
+                        <p class="prep-subtitle">Search for a contact to generate an AI-powered call brief</p>
+                    </div>
+
+                    <div class="prep-search-box">
+                        <input
+                            type="text"
+                            id="prep-search-input"
+                            class="prep-search-input"
+                            placeholder="Enter contact name or email..."
+                            autocomplete="off"
+                        >
+                        <button id="prep-search-btn" class="btn btn-primary prep-search-btn">
+                            <span class="search-icon">🔍</span>
+                            <span>Search</span>
+                        </button>
+                    </div>
+
+                    <!-- Recent Contacts -->
+                    <div id="prep-recent-contacts" class="prep-recent-section hidden">
+                        <h3 class="prep-recent-title">Recent Contacts</h3>
+                        <div id="prep-recent-contacts-grid" class="prep-recent-grid">
+                            <!-- Recent contact cards will be inserted here -->
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Loading Section -->
+                <section id="prep-loading-section" class="section hidden">
+                    <div class="prep-loading-container">
+                        <div class="loader"></div>
+                        <h3 class="prep-loading-title">Preparing Your Brief...</h3>
+
+                        <div class="prep-progress-checklist">
+                            <div class="prep-progress-item" id="prep-step-hubspot">
+                                <span class="prep-progress-icon pending">⏳</span>
+                                <span class="prep-progress-text">Searching HubSpot</span>
+                            </div>
+                            <div class="prep-progress-item" id="prep-step-web">
+                                <span class="prep-progress-icon pending">⏳</span>
+                                <span class="prep-progress-text">Searching web for recent activity</span>
+                            </div>
+                            <div class="prep-progress-item" id="prep-step-preferences">
+                                <span class="prep-progress-icon pending">⏳</span>
+                                <span class="prep-progress-text">Checking investor preferences</span>
+                            </div>
+                            <div class="prep-progress-item" id="prep-step-interactions">
+                                <span class="prep-progress-icon pending">⏳</span>
+                                <span class="prep-progress-text">Retrieving past interactions</span>
+                            </div>
+                            <div class="prep-progress-item" id="prep-step-ai">
+                                <span class="prep-progress-icon pending">⏳</span>
+                                <span class="prep-progress-text">Creating brief with AI</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Error Section -->
+                <section id="prep-error-section" class="section hidden">
+                    <div class="prep-error-container">
+                        <div class="prep-error-icon">⚠️</div>
+                        <h3 class="prep-error-title">Unable to Generate Brief</h3>
+                        <p id="prep-error-message" class="prep-error-message"></p>
+                        <div class="button-group">
+                            <button id="prep-retry-btn" class="btn btn-primary">Try Again</button>
+                            <button id="prep-back-to-search-btn" class="btn btn-secondary">Back to Search</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Brief Result Section -->
+                <section id="prep-brief-section" class="section hidden">
+                    <div class="prep-brief-container">
+                        <!-- Will be populated dynamically with brief content -->
+                    </div>
+                </section>
+
+            </div>
+            <!-- End Prepare for Call Section -->
         </main>
 
         <footer>
