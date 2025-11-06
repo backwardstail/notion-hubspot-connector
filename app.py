@@ -67,10 +67,22 @@ def process_notes():
         if not notes:
             return jsonify({'error': 'Notes cannot be empty'}), 400
 
+        # Get action flags from frontend
+        actions = data.get('actions', {})
+        enable_hubspot_note = actions.get('enable_hubspot_note', True)
+        enable_investor_prefs = actions.get('enable_investor_prefs', True)
+        enable_todos = actions.get('enable_todos', True)
+
         logger.info(f"Processing notes with length: {len(notes)}")
+        logger.info(f"Actions enabled - HubSpot: {enable_hubspot_note}, Investor Prefs: {enable_investor_prefs}, TODOs: {enable_todos}")
 
         # STEP 1: Parse notes with Claude
-        parse_result = parse_meeting_notes(notes, ANTHROPIC_API_KEY)
+        parse_result = parse_meeting_notes(
+            notes,
+            ANTHROPIC_API_KEY,
+            parse_preferences=enable_investor_prefs,
+            parse_todos=enable_todos
+        )
 
         if not parse_result['success']:
             return jsonify({'error': f'Failed to parse notes: {parse_result["error"]}'}), 500
@@ -512,9 +524,9 @@ def confirm_and_execute():
         else:
             logger.warning(f"Cannot construct HubSpot URL - contact_id: {contact_id}, HUBSPOT_PORTAL_ID: {HUBSPOT_PORTAL_ID}")
 
-        # Validate contact_id only if HubSpot is not skipped
-        if not skip_hubspot and not contact_id:
-            return jsonify({'error': 'No contact_id provided'}), 400
+        # Validate that we have at least contact_id or deal_id if HubSpot is not skipped
+        if not skip_hubspot and not contact_id and not deal_id:
+            return jsonify({'error': 'Either contact_id or deal_id must be provided'}), 400
 
         logger.info(f"Executing updates - HubSpot Action: {hubspot_action}, Investor Prefs: {not skip_investor_prefs}, Create TODOs: {len(todos) > 0}")
 
