@@ -36,6 +36,40 @@
                         rows="15"
                     ></textarea>
                 </div>
+
+                <!-- Action Selection Checkboxes -->
+                <div class="preview-card action-selection-card">
+                    <h3>✓ Select Actions to Perform</h3>
+                    <div class="action-checkboxes">
+                        <label class="action-checkbox-label">
+                            <input type="checkbox" id="enable-hubspot-note" checked>
+                            <span class="action-checkbox-icon">📝</span>
+                            <span class="action-checkbox-text">
+                                <strong>Log HubSpot Note</strong>
+                                <span class="action-checkbox-desc">Create a note in HubSpot (optionally with deal)</span>
+                            </span>
+                        </label>
+
+                        <label class="action-checkbox-label">
+                            <input type="checkbox" id="enable-investor-prefs" checked>
+                            <span class="action-checkbox-icon">📊</span>
+                            <span class="action-checkbox-text">
+                                <strong>Update Investor Preferences</strong>
+                                <span class="action-checkbox-desc">Update investment criteria in Notion</span>
+                            </span>
+                        </label>
+
+                        <label class="action-checkbox-label">
+                            <input type="checkbox" id="enable-todos" checked>
+                            <span class="action-checkbox-icon">✅</span>
+                            <span class="action-checkbox-text">
+                                <strong>Log Notion To-Dos</strong>
+                                <span class="action-checkbox-desc">Create follow-up tasks in Notion</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+
                 <div class="button-group">
                     <button id="process-btn" class="btn btn-primary">Process Notes</button>
                 </div>

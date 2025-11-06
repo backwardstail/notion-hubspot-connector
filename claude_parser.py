@@ -91,13 +91,15 @@ def validate_preference_values(preferences):
     return validated
 
 
-def parse_meeting_notes(notes_text, api_key):
+def parse_meeting_notes(notes_text, api_key, parse_preferences=True, parse_todos=True):
     """
     Parse meeting notes using Claude API to extract structured data
 
     Args:
         notes_text (str): Raw meeting notes text
         api_key (str): Anthropic API key
+        parse_preferences (bool): Whether to parse investor preferences (default: True)
+        parse_todos (bool): Whether to parse to-do items (default: True)
 
     Returns:
         dict: {
@@ -110,8 +112,10 @@ def parse_meeting_notes(notes_text, api_key):
         # Calculate tomorrow's date for default due dates
         tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
 
-        # Construct the prompt
-        prompt = f"""You are a structured CRM assistant. Parse these investor call notes and extract:
+        # Construct the prompt dynamically based on what needs to be parsed
+        prompt_sections = []
+
+        prompt_sections.append("""You are a structured CRM assistant. Parse these investor call notes and extract:
 
 1. CONTACT INFORMATION:
    - Investor/Company name
@@ -124,7 +128,11 @@ def parse_meeting_notes(notes_text, api_key):
 
 3. CALL SUMMARY:
    - Create bullet points (3-7 bullets) summarizing key discussion points
-   - Mark any action items inline with [TO-DO] prefix
+   - Mark any action items inline with [TO-DO] prefix""")
+
+        # Only add investor preferences section if requested
+        if parse_preferences:
+            prompt_sections.append("""
 
 4. INVESTOR PREFERENCES (only extract if explicitly mentioned):
    Extract ONLY from these allowed values:
@@ -137,32 +145,48 @@ def parse_meeting_notes(notes_text, api_key):
    - Capital Type: GP Sponsor, LP Sponsor, Fund of Funds, HNW Individual, Family Office
    - When to Call: Post-LOI Signed, Pre-LOI OK, Pre-IOI / Early, Any time
 
-   Also extract free-form preference notes for any preferences that don't fit the dropdowns.
+   Also extract free-form preference notes for any preferences that don't fit the dropdowns.""")
+
+        # Only add to-do items section if requested
+        if parse_todos:
+            prompt_sections.append(f"""
 
 5. TO-DO ITEMS:
    For each action item, create:
    - Task Name: ≤25 words, clear and specific
-   - Due Date: tomorrow's date (YYYY-MM-DD format)
-   - Next Step: detailed description of what needs to be done
+   - Due Date: {tomorrow} (YYYY-MM-DD format)
+   - Next Step: detailed description of what needs to be done""")
+
+        # Build JSON structure based on what's being parsed
+        json_structure = {
+            "contact": {"company_name": "", "person_name": "", "email": ""},
+            "deal": {"deal_name": "", "search_keywords": ""},
+            "summary": ["bullet 1", "bullet 2"]
+        }
+
+        if parse_preferences:
+            json_structure["preferences"] = {
+                "Check Size": [],
+                "Deal Structure": [],
+                "Industry": [],
+                "Preference Notes": ""
+            }
+
+        if parse_todos:
+            json_structure["todos"] = [
+                {"task_name": "", "due_date": "YYYY-MM-DD", "next_step": ""}
+            ]
+
+        # Build the complete prompt
+        prompt_sections.append(f"""
 
 Return ONLY valid JSON with this structure:
-{{
-  "contact": {{"company_name": "", "person_name": "", "email": ""}},
-  "deal": {{"deal_name": "", "search_keywords": ""}},
-  "summary": ["bullet 1", "bullet 2"],
-  "preferences": {{
-    "Check Size": [],
-    "Deal Structure": [],
-    "Industry": [],
-    "Preference Notes": ""
-  }},
-  "todos": [
-    {{"task_name": "", "due_date": "YYYY-MM-DD", "next_step": ""}}
-  ]
-}}
+{json.dumps(json_structure, indent=2)}
 
 MEETING NOTES:
-{notes_text}"""
+{notes_text}""")
+
+        prompt = ''.join(prompt_sections)
 
         # Call Anthropic API
         url = "https://api.anthropic.com/v1/messages"

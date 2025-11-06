@@ -175,6 +175,32 @@ dealDropdown.addEventListener('change', handleDealSelection);
 searchDealsBtn.addEventListener('click', handleSearchDeals);
 dealSearchDropdown.addEventListener('change', handleDealSearchSelection);
 
+// Master action checkbox event listeners
+const enableHubspotNoteCheckbox = document.getElementById('enable-hubspot-note');
+const enableInvestorPrefsCheckbox = document.getElementById('enable-investor-prefs');
+const enableTodosCheckbox = document.getElementById('enable-todos');
+
+if (enableHubspotNoteCheckbox) {
+    enableHubspotNoteCheckbox.addEventListener('change', (e) => {
+        // Optionally toggle HubSpot sections visibility
+        updateExecutionSummary();
+    });
+}
+
+if (enableInvestorPrefsCheckbox) {
+    enableInvestorPrefsCheckbox.addEventListener('change', (e) => {
+        // Optionally toggle investor prefs sections visibility
+        updateExecutionSummary();
+    });
+}
+
+if (enableTodosCheckbox) {
+    enableTodosCheckbox.addEventListener('change', (e) => {
+        // Optionally toggle todos sections visibility
+        updateExecutionSummary();
+    });
+}
+
 // Notion checkbox event listeners
 updateInvestorPrefsCheckbox.addEventListener('change', handleInvestorPrefsCheckboxChange);
 createTodosCheckbox.addEventListener('change', handleTodosCheckboxChange);
@@ -199,12 +225,24 @@ async function handleProcessNotes() {
     showLoading();
 
     try {
+        // Get checkbox states
+        const enableHubspotNote = document.getElementById('enable-hubspot-note').checked;
+        const enableInvestorPrefs = document.getElementById('enable-investor-prefs').checked;
+        const enableTodos = document.getElementById('enable-todos').checked;
+
         const response = await fetch('/api/process-notes', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ notes }),
+            body: JSON.stringify({
+                notes,
+                actions: {
+                    enable_hubspot_note: enableHubspotNote,
+                    enable_investor_prefs: enableInvestorPrefs,
+                    enable_todos: enableTodos
+                }
+            }),
         });
 
         const data = await response.json();
@@ -1631,10 +1669,20 @@ function updateExecutionSummary() {
  * Handle confirm and execute
  */
 async function handleConfirmAndExecute() {
+    // Get master action checkboxes
+    const enableHubspotNote = document.getElementById('enable-hubspot-note')?.checked ?? true;
+    const enableInvestorPrefs = document.getElementById('enable-investor-prefs')?.checked ?? true;
+    const enableTodos = document.getElementById('enable-todos')?.checked ?? true;
+
     // Get user selections first
-    const hubspotAction = document.querySelector('input[name="hubspot-action"]:checked')?.value || 'skip';
-    const shouldUpdateInvestorPrefs = updateInvestorPrefsCheckbox && updateInvestorPrefsCheckbox.checked;
-    const shouldCreateTodos = createTodosCheckbox && createTodosCheckbox.checked;
+    let hubspotAction = document.querySelector('input[name="hubspot-action"]:checked')?.value || 'skip';
+    const shouldUpdateInvestorPrefs = enableInvestorPrefs && updateInvestorPrefsCheckbox && updateInvestorPrefsCheckbox.checked;
+    const shouldCreateTodos = enableTodos && createTodosCheckbox && createTodosCheckbox.checked;
+
+    // Override hubspotAction if master checkbox is disabled
+    if (!enableHubspotNote) {
+        hubspotAction = 'skip';
+    }
 
     // VALIDATION 1: Check if at least one action is selected
     if (hubspotAction === 'skip' && !shouldUpdateInvestorPrefs && !shouldCreateTodos) {
