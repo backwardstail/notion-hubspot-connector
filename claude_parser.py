@@ -125,6 +125,8 @@ def parse_meeting_notes(notes_text, api_key, parse_preferences=True, parse_todos
 2. DEAL INFORMATION (if mentioned):
    - Deal name or company name (e.g., "Acme Corp Acquisition", "TechCo Series A")
    - Any keywords that would help identify the deal in a search
+   - Intelligently suggest a next step based on the call notes context (e.g., "Send pitch deck", "Schedule follow-up call", "Send financial projections")
+   - Suggest an appropriate deal stage based on the conversation (use one of: appointmentscheduled, qualifiedtobuy, presentationscheduled, decisionmakerboughtin, contractsent, 1110891580, closedwon, closedlost, 1173780286)
 
 3. CALL SUMMARY:
    - Create bullet points (3-7 bullets) summarizing key discussion points
@@ -160,7 +162,12 @@ def parse_meeting_notes(notes_text, api_key, parse_preferences=True, parse_todos
         # Build JSON structure based on what's being parsed
         json_structure = {
             "contact": {"company_name": "", "person_name": "", "email": ""},
-            "deal": {"deal_name": "", "search_keywords": ""},
+            "deal": {
+                "deal_name": "",
+                "search_keywords": "",
+                "suggested_next_step": "",
+                "suggested_stage": ""
+            },
             "summary": ["bullet 1", "bullet 2"]
         }
 

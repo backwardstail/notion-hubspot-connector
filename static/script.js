@@ -107,9 +107,14 @@ const dealSearchStatus = document.getElementById('deal-search-status');
 const dealSearchResults = document.getElementById('deal-search-results');
 const dealSearchDropdown = document.getElementById('deal-search-dropdown');
 const dealDetails = document.getElementById('deal-details');
+const dealNameInput = document.getElementById('deal-name');
 const dealStageInput = document.getElementById('deal-stage');
 const dealNextStepInput = document.getElementById('deal-next-step');
 const dealNextStepDateInput = document.getElementById('deal-next-step-date');
+const createDealBtn = document.getElementById('create-deal-btn');
+const createDealStatus = document.getElementById('create-deal-status');
+const dealUpdateInfo = document.getElementById('deal-update-info');
+const dealCreateInfo = document.getElementById('deal-create-info');
 
 // DOM elements - Notion Checkboxes
 const updateInvestorPrefsCheckbox = document.getElementById('update-investor-prefs');
@@ -174,6 +179,7 @@ hubspotActionRadios.forEach(radio => {
 dealDropdown.addEventListener('change', handleDealSelection);
 searchDealsBtn.addEventListener('click', handleSearchDeals);
 dealSearchDropdown.addEventListener('change', handleDealSearchSelection);
+createDealBtn.addEventListener('click', handleCreateDeal);
 
 // Master action checkbox event listeners
 const enableHubspotNoteCheckbox = document.getElementById('enable-hubspot-note');
@@ -424,13 +430,20 @@ function displayParsedDeals(preview) {
 
         console.log(`Populated ${deals.length} parsed deals in deal search`);
     } else if (dealStatus === 'not_found') {
-        // Deal was mentioned in notes but not found in HubSpot
+        // Deal was mentioned in notes but not found in HubSpot - show create mode
         const parsedDeal = preview.parsed_deal || {};
         const dealName = parsedDeal.deal_name || parsedDeal.search_keywords;
         if (dealName) {
             dealSearchInput.value = dealName;
-            dealSearchStatus.textContent = `⚠️ Deal "${dealName}" mentioned in notes but not found in HubSpot`;
+            dealSearchStatus.textContent = `⚠️ Deal "${dealName}" not found. Create a new deal below.`;
             dealSearchStatus.style.color = '#d97706';
+
+            // Automatically show deal creation form with intelligent suggestions
+            showDealCreationMode({
+                deal_name: dealName,
+                suggested_stage: parsedDeal.suggested_stage || 'appointmentscheduled',
+                suggested_next_step: parsedDeal.suggested_next_step || ''
+            });
         }
     }
 }
@@ -1339,9 +1352,42 @@ function handleDealSelection(e) {
  * Populate deal fields with current deal data
  */
 function populateDealFields(dealData) {
+    dealNameInput.value = dealData.name || '';
     dealStageInput.value = dealData.stage || '';
     dealNextStepInput.value = dealData.next_step || '';
     dealNextStepDateInput.value = dealData.next_step_date || '';
+
+    // Show update mode UI
+    dealNameInput.disabled = true; // Can't change deal name when updating
+    createDealBtn.classList.add('hidden');
+    dealUpdateInfo.classList.remove('hidden');
+    dealCreateInfo.classList.add('hidden');
+}
+
+/**
+ * Show deal creation mode with pre-populated suggested values
+ */
+function showDealCreationMode(suggestedData) {
+    // Pre-populate with suggestions from call notes
+    dealNameInput.value = suggestedData.deal_name || '';
+    dealStageInput.value = suggestedData.suggested_stage || 'appointmentscheduled';
+    dealNextStepInput.value = suggestedData.suggested_next_step || '';
+
+    // Set default next step date to tomorrow if not provided
+    if (!dealNextStepDateInput.value) {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        dealNextStepDateInput.value = tomorrow.toISOString().split('T')[0];
+    }
+
+    // Show create mode UI
+    dealNameInput.disabled = false;
+    createDealBtn.classList.remove('hidden');
+    dealUpdateInfo.classList.add('hidden');
+    dealCreateInfo.classList.remove('hidden');
+
+    // Show the deal details section
+    dealDetails.classList.remove('hidden');
 }
 
 /**
@@ -1378,9 +1424,17 @@ async function handleSearchDeals() {
         const deals = data.deals || [];
 
         if (deals.length === 0) {
-            dealSearchStatus.textContent = `⚠️ No deals found for "${query}"`;
+            dealSearchStatus.textContent = `⚠️ No deals found for "${query}". Create a new deal below.`;
             dealSearchStatus.style.color = '#d97706';
             dealSearchResults.classList.add('hidden');
+
+            // Show deal creation mode with suggested data
+            const dealInfo = processedData?.parsed_deal || {};
+            showDealCreationMode({
+                deal_name: query,
+                suggested_stage: dealInfo.suggested_stage,
+                suggested_next_step: dealInfo.suggested_next_step
+            });
         } else {
             dealSearchStatus.textContent = `✓ Found ${deals.length} deal(s)`;
             dealSearchStatus.style.color = '#10b981';
@@ -1432,6 +1486,91 @@ function handleDealSearchSelection(e) {
         selectedDealData = null;
         dealDetails.classList.add('hidden');
         updateExecutionSummary();
+    }
+}
+
+/**
+ * Handle create deal button click
+ */
+async function handleCreateDeal() {
+    const dealName = dealNameInput.value.trim();
+    const stage = dealStageInput.value;
+    const nextStep = dealNextStepInput.value.trim();
+    const nextStepDate = dealNextStepDateInput.value;
+
+    // Validation
+    if (!dealName) {
+        createDealStatus.textContent = '⚠️ Deal name is required';
+        createDealStatus.style.color = '#d97706';
+        return;
+    }
+
+    if (!stage) {
+        createDealStatus.textContent = '⚠️ Deal stage is required';
+        createDealStatus.style.color = '#d97706';
+        return;
+    }
+
+    if (!nextStep) {
+        createDealStatus.textContent = '⚠️ Next step is required';
+        createDealStatus.style.color = '#d97706';
+        return;
+    }
+
+    createDealStatus.textContent = 'Creating deal...';
+    createDealStatus.style.color = '#0c4a6e';
+    createDealBtn.disabled = true;
+
+    try {
+        const response = await fetch('/api/create-deal', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                deal_name: dealName,
+                stage: stage,
+                next_step: nextStep,
+                next_step_date: nextStepDate,
+                contact_id: selectedContactId
+            }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to create deal');
+        }
+
+        // Successfully created deal
+        createDealStatus.textContent = `✓ Deal created successfully!`;
+        createDealStatus.style.color = '#10b981';
+
+        // Store the newly created deal
+        selectedDealId = data.deal_id;
+        selectedDealData = {
+            id: data.deal_id,
+            name: dealName,
+            stage: stage,
+            next_step: nextStep,
+            next_step_date: nextStepDate
+        };
+
+        // Switch to update mode
+        dealNameInput.disabled = true;
+        createDealBtn.classList.add('hidden');
+        dealUpdateInfo.classList.remove('hidden');
+        dealCreateInfo.classList.add('hidden');
+
+        console.log('Deal created successfully:', selectedDealId);
+        updateExecutionSummary();
+
+    } catch (error) {
+        console.error('Error creating deal:', error);
+        createDealStatus.textContent = `❌ Error: ${error.message}`;
+        createDealStatus.style.color = '#dc2626';
+    } finally {
+        createDealBtn.disabled = false;
     }
 }
 

@@ -4,7 +4,7 @@ import requests
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from hubspot_client import search_hubspot_contact, create_hubspot_contact, log_hubspot_note, get_contact_deals, search_hubspot_deals, update_hubspot_deal
+from hubspot_client import search_hubspot_contact, create_hubspot_contact, log_hubspot_note, get_contact_deals, search_hubspot_deals, update_hubspot_deal, create_hubspot_deal
 from notion_client import (
     search_investor_preferences,
     get_page_properties,
@@ -421,6 +421,65 @@ def search_deals():
 
     except Exception as e:
         logger.error(f"Error searching deals: {str(e)}", exc_info=True)
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
+
+
+@app.route('/api/create-deal', methods=['POST'])
+def create_deal():
+    """
+    Create a new HubSpot deal
+
+    Request body should include:
+    - deal_name: Name of the deal
+    - stage: Deal stage ID
+    - next_step: Next step description
+    - next_step_date: Next step date (YYYY-MM-DD format, optional)
+    - contact_id: HubSpot contact ID to associate with (optional)
+    """
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        deal_name = data.get('deal_name', '').strip()
+        stage = data.get('stage', '').strip()
+        next_step = data.get('next_step', '').strip()
+        next_step_date = data.get('next_step_date', '').strip()
+        contact_id = data.get('contact_id', '').strip()
+
+        if not deal_name:
+            return jsonify({'error': 'Deal name is required'}), 400
+
+        if not stage:
+            return jsonify({'error': 'Deal stage is required'}), 400
+
+        if not next_step:
+            return jsonify({'error': 'Next step is required'}), 400
+
+        logger.info(f"Creating new deal: {deal_name}, stage: {stage}, contact: {contact_id}")
+
+        result = create_hubspot_deal(
+            deal_name=deal_name,
+            stage=stage,
+            next_step=next_step,
+            next_step_date=next_step_date,
+            contact_id=contact_id if contact_id else None,
+            api_key=HUBSPOT_API_KEY
+        )
+
+        if result['success']:
+            return jsonify({
+                'success': True,
+                'deal_id': result['data']['id'],
+                'deal': result['data'],
+                'message': 'Deal created successfully'
+            }), 200
+        else:
+            return jsonify({'error': result['error']}), 500
+
+    except Exception as e:
+        logger.error(f"Error creating deal: {str(e)}", exc_info=True)
         return jsonify({'error': f'Server error: {str(e)}'}), 500
 
 
