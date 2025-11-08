@@ -624,3 +624,102 @@ def update_hubspot_deal(deal_id, properties, api_key):
             'data': None,
             'error': error_msg
         }
+
+
+def create_hubspot_deal(deal_name, stage, next_step, next_step_date, contact_id, api_key):
+    """
+    Create a new deal in HubSpot and associate it with a contact
+
+    Args:
+        deal_name (str): Name of the deal
+        stage (str): Deal stage ID (e.g., "appointmentscheduled")
+        next_step (str): Next step description
+        next_step_date (str): Next step date in YYYY-MM-DD format
+        contact_id (str, optional): HubSpot contact ID to associate with the deal
+        api_key (str): HubSpot API key
+
+    Returns:
+        dict: {'success': bool, 'data': deal_data with 'id' key, 'error': error_message or None}
+    """
+    try:
+        create_url = f"{HUBSPOT_API_BASE}/crm/v3/objects/deals"
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+
+        # Build properties
+        properties = {
+            "dealname": deal_name,
+            "dealstage": stage,
+            "hs_next_step": next_step
+        }
+
+        # Add next step date if provided
+        if next_step_date:
+            # Convert YYYY-MM-DD to Unix timestamp in milliseconds (UTC midnight)
+            try:
+                # Parse date and create datetime at midnight UTC
+                date_parts = next_step_date.split('-')
+                year, month, day = int(date_parts[0]), int(date_parts[1]), int(date_parts[2])
+                # Create datetime at midnight UTC
+                from datetime import datetime, timezone
+                date_obj = datetime(year, month, day, 0, 0, 0, tzinfo=timezone.utc)
+                # HubSpot expects Unix timestamp in milliseconds at midnight UTC
+                timestamp_ms = int(date_obj.timestamp() * 1000)
+                properties["next_steps_date"] = str(timestamp_ms)
+            except (ValueError, IndexError):
+                logger.warning(f"Invalid date format: {next_step_date}, skipping next_steps_date")
+
+        payload = {
+            "properties": properties
+        }
+
+        # Add contact association if provided
+        if contact_id:
+            payload["associations"] = [
+                {
+                    "to": {
+                        "id": contact_id
+                    },
+                    "types": [
+                        {
+                            "associationCategory": "HUBSPOT_DEFINED",
+                            "associationTypeId": 3  # Deal to Contact association
+                        }
+                    ]
+                }
+            ]
+
+        logger.info(f"Creating deal: {deal_name} with stage: {stage}, next_step: {next_step}, contact: {contact_id}")
+        response = requests.post(create_url, headers=headers, json=payload)
+
+        if response.status_code == 201:
+            deal_data = response.json()
+            deal_id = deal_data.get('id')
+            logger.info(f"Successfully created deal with ID: {deal_id}")
+            return {
+                'success': True,
+                'data': {
+                    'id': deal_id,
+                    'properties': deal_data.get('properties', {})
+                },
+                'error': None
+            }
+        else:
+            error_msg = f"Failed to create deal: {response.status_code} - {response.text}"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'data': None,
+                'error': error_msg
+            }
+
+    except Exception as e:
+        error_msg = f"Error creating deal: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {
+            'success': False,
+            'data': None,
+            'error': error_msg
+        }
