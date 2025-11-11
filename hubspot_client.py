@@ -723,3 +723,93 @@ def create_hubspot_deal(deal_name, stage, next_step, next_step_date, contact_id,
             'data': None,
             'error': error_msg
         }
+
+
+def create_hubspot_task(task_title, contact_id, due_days, api_key):
+    """
+    Create a task in HubSpot and associate it with a contact
+
+    Args:
+        task_title (str): Title/subject of the task
+        contact_id (str): HubSpot contact ID to associate with the task
+        due_days (int): Number of days from now for the due date (e.g., 30, 90, 180)
+        api_key (str): HubSpot API key
+
+    Returns:
+        dict: {'success': bool, 'data': task_data with 'id' key, 'error': error_message or None}
+    """
+    try:
+        create_url = f"{HUBSPOT_API_BASE}/crm/v3/objects/tasks"
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+
+        # Calculate due date timestamp (in milliseconds, UTC midnight)
+        from datetime import datetime, timedelta, timezone
+        due_date = datetime.now(timezone.utc) + timedelta(days=due_days)
+        # Set to midnight UTC
+        due_date = due_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        due_timestamp_ms = int(due_date.timestamp() * 1000)
+
+        # Build task properties
+        properties = {
+            "hs_task_subject": task_title,
+            "hs_task_body": f"Follow-up task created automatically from call notes",
+            "hs_task_status": "NOT_STARTED",
+            "hs_task_priority": "MEDIUM",
+            "hs_timestamp": due_timestamp_ms
+        }
+
+        payload = {
+            "properties": properties
+        }
+
+        # Add contact association
+        if contact_id:
+            payload["associations"] = [
+                {
+                    "to": {
+                        "id": contact_id
+                    },
+                    "types": [
+                        {
+                            "associationCategory": "HUBSPOT_DEFINED",
+                            "associationTypeId": 204  # Task to Contact association
+                        }
+                    ]
+                }
+            ]
+
+        logger.info(f"Creating task: {task_title} for contact: {contact_id}, due in {due_days} days")
+        response = requests.post(create_url, headers=headers, json=payload)
+
+        if response.status_code == 201:
+            task_data = response.json()
+            task_id = task_data.get('id')
+            logger.info(f"Successfully created task with ID: {task_id}")
+            return {
+                'success': True,
+                'data': {
+                    'id': task_id,
+                    'properties': task_data.get('properties', {})
+                },
+                'error': None
+            }
+        else:
+            error_msg = f"Failed to create task: {response.status_code} - {response.text}"
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'data': None,
+                'error': error_msg
+            }
+
+    except Exception as e:
+        error_msg = f"Error creating task: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {
+            'success': False,
+            'data': None,
+            'error': error_msg
+        }

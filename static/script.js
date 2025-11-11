@@ -11,6 +11,13 @@ let selectedDealId = null;
 let selectedDealData = null; // Store full deal data including stage, next_step, etc.
 let hubspotAction = 'log_only'; // 'log_only', 'log_with_deal', or 'skip'
 
+// Store submission page action selections
+let submissionPageActions = {
+    enable_hubspot_note: true,
+    enable_investor_prefs: true,
+    enable_todos: true
+};
+
 // Deal stage display name mapping
 const DEAL_STAGE_NAMES = {
     'appointmentscheduled': '1. New Lead (Sales Pipeline)',
@@ -125,6 +132,12 @@ const investorSkipWarning = document.getElementById('investor-skip-warning');
 const todosSkipWarning = document.getElementById('todos-skip-warning');
 const selectAllTodosCheckbox = document.getElementById('select-all-todos');
 
+// DOM elements - Future Task
+const createFutureTaskCheckbox = document.getElementById('create-future-task');
+const futureTaskOptions = document.getElementById('future-task-options');
+const taskTitleInput = document.getElementById('task-title');
+const taskDueDaysSelect = document.getElementById('task-due-days');
+
 // DOM elements - Actions
 const confirmBtn = document.getElementById('confirm-btn');
 const cancelBtn = document.getElementById('cancel-btn');
@@ -212,6 +225,19 @@ updateInvestorPrefsCheckbox.addEventListener('change', handleInvestorPrefsCheckb
 createTodosCheckbox.addEventListener('change', handleTodosCheckboxChange);
 selectAllTodosCheckbox.addEventListener('change', handleSelectAllTodos);
 
+// Future Task checkbox event listener
+createFutureTaskCheckbox.addEventListener('change', handleFutureTaskCheckboxChange);
+
+// Update task title when contact name changes
+function updateTaskTitle() {
+    if (selectedContactName && taskTitleInput) {
+        taskTitleInput.placeholder = `Check in with ${selectedContactName}`;
+        if (!taskTitleInput.value) {
+            taskTitleInput.value = `Check in with ${selectedContactName}`;
+        }
+    }
+}
+
 /**
  * Handle processing of notes
  */
@@ -235,6 +261,13 @@ async function handleProcessNotes() {
         const enableHubspotNote = document.getElementById('enable-hubspot-note').checked;
         const enableInvestorPrefs = document.getElementById('enable-investor-prefs').checked;
         const enableTodos = document.getElementById('enable-todos').checked;
+
+        // Store these for use in confirmation page
+        submissionPageActions = {
+            enable_hubspot_note: enableHubspotNote,
+            enable_investor_prefs: enableInvestorPrefs,
+            enable_todos: enableTodos
+        };
 
         const response = await fetch('/api/process-notes', {
             method: 'POST',
@@ -289,16 +322,26 @@ function displayPreview(preview) {
     // Reset radio to "log_only"
     document.querySelector('input[name="hubspot-action"][value="log_only"]').checked = true;
 
-    // Reset Notion checkboxes to checked (default state)
+    // Reset Notion checkboxes based on submission page selections
     if (updateInvestorPrefsCheckbox) {
-        updateInvestorPrefsCheckbox.checked = true;
-        investorPreviewContainer.classList.remove('disabled');
-        investorSkipWarning.classList.add('hidden');
+        updateInvestorPrefsCheckbox.checked = submissionPageActions.enable_investor_prefs;
+        if (submissionPageActions.enable_investor_prefs) {
+            investorPreviewContainer.classList.remove('disabled');
+            investorSkipWarning.classList.add('hidden');
+        } else {
+            investorPreviewContainer.classList.add('disabled');
+            investorSkipWarning.classList.remove('hidden');
+        }
     }
     if (createTodosCheckbox) {
-        createTodosCheckbox.checked = true;
-        todosPreviewContainer.classList.remove('disabled');
-        todosSkipWarning.classList.add('hidden');
+        createTodosCheckbox.checked = submissionPageActions.enable_todos;
+        if (submissionPageActions.enable_todos) {
+            todosPreviewContainer.classList.remove('disabled');
+            todosSkipWarning.classList.add('hidden');
+        } else {
+            todosPreviewContainer.classList.add('disabled');
+            todosSkipWarning.classList.remove('hidden');
+        }
     }
 
     // Handle HubSpot contact display
@@ -1236,6 +1279,9 @@ function showHubSpotActionsCard() {
     dealSelection.classList.add('hidden');
     selectedDealId = null;
 
+    // Update task title with contact name
+    updateTaskTitle();
+
     // Update skip warnings
     skipHubspot = false;
     updateExecutionSummary();
@@ -1617,6 +1663,24 @@ function handleTodosCheckboxChange(e) {
 }
 
 /**
+ * Handle future task checkbox change
+ */
+function handleFutureTaskCheckboxChange(e) {
+    const isChecked = e.target.checked;
+    console.log('Create future task:', isChecked);
+
+    if (isChecked) {
+        // Show task options
+        futureTaskOptions.classList.remove('disabled');
+    } else {
+        // Hide task options
+        futureTaskOptions.classList.add('disabled');
+    }
+
+    updateExecutionSummary();
+}
+
+/**
  * Handle individual todo checkbox change
  */
 function handleTodoCheckboxChange(e) {
@@ -1871,6 +1935,16 @@ async function handleConfirmAndExecute() {
             if (dealNextStepDateInput.value) dealUpdates.next_steps_date = dealNextStepDateInput.value;
         }
 
+        // Build future task data if checkbox is checked
+        const shouldCreateFutureTask = createFutureTaskCheckbox && createFutureTaskCheckbox.checked;
+        const futureTask = shouldCreateFutureTask ? {
+            create_task: true,
+            task_title: taskTitleInput.value || `Check in with ${selectedContactName}`,
+            due_days: parseInt(taskDueDaysSelect.value) || 90
+        } : {
+            create_task: false
+        };
+
         const payload = {
             hubspot: {
                 action: hubspotAction,
@@ -1879,7 +1953,8 @@ async function handleConfirmAndExecute() {
                 deal_id: selectedDealId || null,
                 deal_updates: dealUpdates,
                 summary: processedData.summary || [],
-                raw_notes: processedData.raw_notes || ''
+                raw_notes: processedData.raw_notes || '',
+                future_task: futureTask
             },
             notion: {
                 update_investor_prefs: shouldUpdateInvestorPrefs && !skipInvestorPrefs,

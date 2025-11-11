@@ -1909,3 +1909,21 @@ footer {
         font-size: 0.85rem;
     }
 }
+
+/* Future Task Section */
+.future-task-section {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.future-task-options {
+    margin-left: 32px;
+    margin-top: 15px;
+    transition: opacity 0.3s ease;
+}
+
+.future-task-options.disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}

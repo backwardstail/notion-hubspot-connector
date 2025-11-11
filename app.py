@@ -4,7 +4,7 @@ import requests
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from hubspot_client import search_hubspot_contact, create_hubspot_contact, log_hubspot_note, get_contact_deals, search_hubspot_deals, update_hubspot_deal, create_hubspot_deal
+from hubspot_client import search_hubspot_contact, create_hubspot_contact, log_hubspot_note, get_contact_deals, search_hubspot_deals, update_hubspot_deal, create_hubspot_deal, create_hubspot_task
 from notion_client import (
     search_investor_preferences,
     get_page_properties,
@@ -668,6 +668,32 @@ def confirm_and_execute():
                 results['errors'].append(f"HubSpot note error: {str(e)}")
                 logger.error(f"Error creating HubSpot note: {str(e)}", exc_info=True)
 
+        # STEP 1.5: Create future task if requested
+        future_task_data = hubspot_data.get('future_task', {}) if is_new_format else {}
+        if future_task_data.get('create_task', False) and contact_id:
+            try:
+                task_title = future_task_data.get('task_title', f'Check in with {contact_name}')
+                due_days = future_task_data.get('due_days', 90)
+
+                logger.info(f"Creating future task: {task_title}, due in {due_days} days")
+                task_result = create_hubspot_task(
+                    task_title=task_title,
+                    contact_id=contact_id,
+                    due_days=due_days,
+                    api_key=HUBSPOT_API_KEY
+                )
+
+                if task_result['success']:
+                    results['hubspot']['task_id'] = task_result['data']['id']
+                    results['hubspot']['task_created'] = True
+                    logger.info(f"Successfully created task: {task_result['data']['id']}")
+                else:
+                    results['hubspot']['task_error'] = task_result['error']
+                    logger.warning(f"Failed to create task: {task_result['error']}")
+            except Exception as task_error:
+                logger.error(f"Error creating task: {str(task_error)}", exc_info=True)
+                results['hubspot']['task_error'] = str(task_error)
+
         # STEP 2: Update or create Notion investor preferences (conditionally)
         if not skip_investor_prefs and company_name and preferences:
             try:
@@ -953,6 +979,14 @@ def build_execution_summary(results):
         summary['hubspot']['status'] = 'error'
         summary['hubspot']['error'] = hubspot['error']
         summary['messages'].append(f"✗ HubSpot note failed")
+
+    # HubSpot Task summary
+    if hubspot.get('task_created'):
+        summary['hubspot']['task_created'] = True
+        summary['hubspot']['task_id'] = hubspot.get('task_id')
+        summary['messages'].append(f"✓ Follow-up task created")
+    elif hubspot.get('task_error'):
+        summary['messages'].append(f"⚠ Follow-up task failed: {hubspot['task_error']}")
 
     # Notion Investor summary
     notion = results.get('notion', {})
