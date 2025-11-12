@@ -4,6 +4,8 @@ import requests
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from hubspot_client import search_hubspot_contact, create_hubspot_contact, log_hubspot_note, get_contact_deals, search_hubspot_deals, update_hubspot_deal, create_hubspot_deal, create_hubspot_task
 from notion_client import (
     search_investor_preferences,
@@ -14,6 +16,7 @@ from notion_client import (
 )
 from claude_parser import parse_meeting_notes
 from call_preparer import prepare_call_brief, synthesize_brief_with_claude
+from deal_reminder import send_daily_deal_reminders
 
 # Load environment variables
 load_dotenv()
@@ -37,6 +40,54 @@ NOTION_API_KEY = os.getenv('NOTION_API_KEY')
 NOTION_INVESTOR_PREFS_DB_ID = os.getenv('NOTION_INVESTOR_PREFS_DB_ID')
 NOTION_TODOS_DB_ID = os.getenv('NOTION_TODOS_DB_ID')
 SERPER_API_KEY = os.getenv('SERPER_API_KEY')  # Optional: For web search functionality
+
+# Email reminder configuration
+REMINDER_EMAIL_TO = os.getenv('REMINDER_EMAIL_TO')
+REMINDER_EMAIL_FROM = os.getenv('REMINDER_EMAIL_FROM')
+SMTP_SERVER = os.getenv('SMTP_SERVER')
+SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
+SMTP_USERNAME = os.getenv('SMTP_USERNAME')
+SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
+REMINDER_ENABLED = os.getenv('REMINDER_ENABLED', 'false').lower() == 'true'
+REMINDER_TIME = os.getenv('REMINDER_TIME', '08:00')  # Default: 8 AM
+
+
+def run_daily_reminder_job():
+    """
+    Scheduled job to send daily deal reminders
+    """
+    logger.info("Running scheduled daily deal reminder job")
+
+    try:
+        # Check if reminder is enabled and all required config is present
+        if not REMINDER_ENABLED:
+            logger.info("Deal reminders are disabled (REMINDER_ENABLED=false)")
+            return
+
+        if not all([HUBSPOT_API_KEY, HUBSPOT_PORTAL_ID, REMINDER_EMAIL_TO,
+                    SMTP_SERVER, SMTP_USERNAME, SMTP_PASSWORD, REMINDER_EMAIL_FROM]):
+            logger.warning("Deal reminder config incomplete - skipping reminder")
+            return
+
+        # Send reminders
+        result = send_daily_deal_reminders(
+            hubspot_api_key=HUBSPOT_API_KEY,
+            hubspot_portal_id=HUBSPOT_PORTAL_ID,
+            to_email=REMINDER_EMAIL_TO,
+            smtp_server=SMTP_SERVER,
+            smtp_port=SMTP_PORT,
+            smtp_username=SMTP_USERNAME,
+            smtp_password=SMTP_PASSWORD,
+            from_email=REMINDER_EMAIL_FROM
+        )
+
+        if result['success']:
+            logger.info(f"Daily reminder completed: {result['message']}")
+        else:
+            logger.error(f"Daily reminder failed: {result.get('error', 'Unknown error')}")
+
+    except Exception as e:
+        logger.error(f"Error in daily reminder job: {str(e)}", exc_info=True)
 
 
 @app.route('/')
@@ -1200,6 +1251,40 @@ if __name__ == '__main__':
     if missing_vars:
         logger.warning(f"Missing environment variables: {', '.join(missing_vars)}")
         logger.warning("Please copy .env.example to .env and fill in your API keys")
+
+    # Set up scheduled job for daily deal reminders
+    if REMINDER_ENABLED:
+        logger.info("Setting up daily deal reminder scheduler")
+
+        # Parse reminder time (format: HH:MM)
+        try:
+            hour, minute = map(int, REMINDER_TIME.split(':'))
+            logger.info(f"Daily reminders scheduled for {hour:02d}:{minute:02d} UTC")
+
+            scheduler = BackgroundScheduler()
+
+            # Schedule the job to run daily at the specified time (UTC)
+            scheduler.add_job(
+                func=run_daily_reminder_job,
+                trigger=CronTrigger(hour=hour, minute=minute),
+                id='daily_deal_reminder',
+                name='Send daily deal reminders',
+                replace_existing=True
+            )
+
+            scheduler.start()
+            logger.info("Daily deal reminder scheduler started successfully")
+
+            # Optional: Run once on startup for testing (comment out in production)
+            # logger.info("Running initial reminder check on startup")
+            # run_daily_reminder_job()
+
+        except ValueError:
+            logger.error(f"Invalid REMINDER_TIME format: {REMINDER_TIME}. Expected HH:MM")
+        except Exception as e:
+            logger.error(f"Failed to start reminder scheduler: {str(e)}", exc_info=True)
+    else:
+        logger.info("Daily deal reminders are disabled (REMINDER_ENABLED=false)")
 
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)

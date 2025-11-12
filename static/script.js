@@ -316,6 +316,18 @@ function displayPreview(preview) {
     selectedDealId = null;
     hubspotAction = 'log_only';
 
+    // Reset Future Task fields (clear old values to allow AI regeneration)
+    if (taskTitleInput) {
+        taskTitleInput.value = '';
+        taskTitleInput.placeholder = 'Check in with contact';
+    }
+    if (createFutureTaskCheckbox) {
+        createFutureTaskCheckbox.checked = false;
+    }
+    if (futureTaskOptions) {
+        futureTaskOptions.classList.add('disabled');
+    }
+
     // Reset HubSpot actions UI
     hubspotActionsCard.classList.add('hidden');
     dealSelection.classList.add('hidden');
