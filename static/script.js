@@ -171,7 +171,7 @@ investorSelect.addEventListener('change', handleInvestorSelection);
 searchInvestorBtn.addEventListener('click', handleSearchInvestor);
 backFromInvestorSearch.addEventListener('click', showInvestorOptions);
 backFromInvestorCreate.addEventListener('click', showInvestorOptions);
-confirmInvestorCreateBtn.addEventListener('click', handleCreateInvestor);
+confirmInvestorCreateBtn.addEventListener('click', handleConfirmInvestorCreate);
 skipInvestorMultipleBtn.addEventListener('click', handleSkipInvestorPrefs);
 searchInvestorAgainMultipleBtn.addEventListener('click', showSearchInvestorAgainFromMultiple);
 searchDifferentInvestorBtn.addEventListener('click', showSearchDifferentInvestor);
@@ -997,11 +997,8 @@ function handleInvestorOptionClick(e) {
         searchInvestorForm.classList.remove('hidden');
         searchInvestorInput.focus();
     } else if (option === 'create-investor') {
-        // Show confirmation with the company name and preferences
-        const companyName = processedData?.parsed_contact?.company_name || 'Unknown Company';
-        document.getElementById('new-investor-name').textContent = companyName;
-        document.getElementById('new-investor-prefs').textContent = JSON.stringify(processedData?.preferences || {}, null, 2);
-        createInvestorConfirm.classList.remove('hidden');
+        // Call the handleCreateInvestor function
+        handleCreateInvestor();
     }
 }
 
@@ -1228,20 +1225,50 @@ async function handleCreateInvestor() {
     const companyName = processedData?.parsed_contact?.company_name;
     const preferences = processedData?.preferences;
 
-    if (!companyName) {
-        showPreviewError('Cannot create investor: missing company name');
-        return;
-    }
-
     // We'll mark that we want to create a new investor
     // The actual creation happens in confirm-and-execute
     investorPageId = 'CREATE_NEW';
     skipInvestorPrefs = false;
 
-    // Hide investor-not-found and show investor-found with create indicator
-    investorNotFound.classList.add('hidden');
+    // Hide the option cards but keep the investor-not-found container visible
+    const optionCards = document.getElementById('investor-option-cards');
+    if (optionCards) optionCards.classList.add('hidden');
+
+    // Show the create form
+    const createForm = document.getElementById('create-investor-confirm');
+    createForm.classList.remove('hidden');
+
+    // Pre-populate the manual company name field with AI-parsed value if available
+    const manualCompanyNameInput = document.getElementById('manual-company-name');
+    manualCompanyNameInput.value = companyName || '';
+
+    // Display preferences
+    const newInvestorPrefs = document.getElementById('new-investor-prefs');
+    newInvestorPrefs.textContent = JSON.stringify(preferences || {}, null, 2);
+
+    updateExecutionSummary();
+}
+
+/**
+ * Handle confirm investor create (validates company name before proceeding)
+ */
+function handleConfirmInvestorCreate() {
+    const manualCompanyNameInput = document.getElementById('manual-company-name');
+    const companyName = manualCompanyNameInput?.value?.trim();
+
+    // Validate that company name is provided
+    if (!companyName) {
+        showPreviewError('Please enter a company name before creating the investor');
+        manualCompanyNameInput?.focus();
+        return;
+    }
+
+    // Hide the create form and show the confirmation in the investor-found section
+    const createForm = document.getElementById('create-investor-confirm');
+    createForm.classList.add('hidden');
     investorFound.classList.remove('hidden');
 
+    // Create a visual indicator that shows we're creating a new investor
     const createIndicator = document.createElement('div');
     createIndicator.style.cssText = 'background: #f0f9ff; padding: 15px; border-radius: 6px; margin-bottom: 15px; border-left: 4px solid #0066cc;';
     createIndicator.innerHTML = `<strong>➕ New investor will be created:</strong> ${companyName}<br><span style="font-size: 0.9rem; color: #666;">Preferences will be added to Notion.</span>`;
@@ -1253,7 +1280,12 @@ async function handleCreateInvestor() {
 
     investorFound.insertBefore(createIndicator, investorFound.firstChild);
 
-    preferencesJson.textContent = JSON.stringify(preferences || {}, null, 2);
+    // Display the preferences in the main section (get fresh reference in case DOM was rebuilt)
+    const preferences = processedData?.preferences;
+    const preferencesJsonElement = document.getElementById('preferences-json');
+    if (preferencesJsonElement) {
+        preferencesJsonElement.textContent = JSON.stringify(preferences || {}, null, 2);
+    }
 
     updateExecutionSummary();
 }
@@ -1818,7 +1850,16 @@ function updateExecutionSummary() {
     const shouldUpdateInvestorPrefs = updateInvestorPrefsCheckbox && updateInvestorPrefsCheckbox.checked;
 
     if (shouldUpdateInvestorPrefs && !skipInvestorPrefs) {
-        if (selectedInvestorId && selectedInvestorName) {
+        if (investorPageId === 'CREATE_NEW') {
+            // Creating new investor
+            const manualCompanyNameInput = document.getElementById('manual-company-name');
+            const companyName = manualCompanyNameInput?.value?.trim() || processedData?.parsed_contact?.company_name || 'New Investor';
+            const li = document.createElement('li');
+            li.className = 'success';
+            li.innerHTML = `Will create new investor <strong>${companyName}</strong> with preferences in Notion`;
+            executionSummaryList.appendChild(li);
+        } else if (selectedInvestorId && selectedInvestorName) {
+            // Updating existing investor
             const li = document.createElement('li');
             li.className = 'success';
             li.innerHTML = `Will update investor preferences for <strong>${selectedInvestorName}</strong>`;
@@ -1913,6 +1954,16 @@ async function handleConfirmAndExecute() {
         return;
     }
 
+    // VALIDATION 5: Check company name if creating new investor
+    if (shouldUpdateInvestorPrefs && !skipInvestorPrefs && investorPageId === 'CREATE_NEW') {
+        const manualCompanyNameInput = document.getElementById('manual-company-name');
+        const companyName = manualCompanyNameInput?.value?.trim();
+        if (!companyName) {
+            showPreviewError('⚠️ Please enter a company name to create the new investor.');
+            return;
+        }
+    }
+
     // Disable buttons to prevent double submission
     confirmBtn.disabled = true;
     cancelBtn.disabled = true;
@@ -1945,6 +1996,12 @@ async function handleConfirmAndExecute() {
             create_task: false
         };
 
+        // Get company name from manual input field if creating new investor, otherwise use AI-parsed value
+        const manualCompanyNameInput = document.getElementById('manual-company-name');
+        const companyName = (investorPageId === 'CREATE_NEW' && manualCompanyNameInput?.value)
+            ? manualCompanyNameInput.value.trim()
+            : processedData.parsed_contact?.company_name || '';
+
         const payload = {
             hubspot: {
                 action: hubspotAction,
@@ -1959,7 +2016,7 @@ async function handleConfirmAndExecute() {
             notion: {
                 update_investor_prefs: shouldUpdateInvestorPrefs && !skipInvestorPrefs,
                 create_todos: shouldCreateTodos,
-                company_name: processedData.parsed_contact?.company_name || '',
+                company_name: companyName,
                 preferences: processedData.preferences || {},
                 todos: todosToSend
             },

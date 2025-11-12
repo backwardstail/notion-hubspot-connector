@@ -372,7 +372,11 @@
                                         <div id="create-investor-confirm" class="option-form hidden">
                                             <button class="btn-back" id="back-from-investor-create">← Back to options</button>
                                             <h4>Create New Investor</h4>
-                                            <p class="info-text-small">Company: <strong id="new-investor-name"></strong></p>
+                                            <div class="form-group">
+                                                <label for="manual-company-name">Company Name:</label>
+                                                <input type="text" id="manual-company-name" class="form-control" placeholder="Enter company name">
+                                                <p class="info-text-small" style="margin-top: 5px; color: #666;">Pre-populated from AI parsing if available</p>
+                                            </div>
                                             <p class="info-text-small">The following preferences will be added:</p>
                                             <pre id="new-investor-prefs" class="json-preview-small"></pre>
                                             <button id="confirm-investor-create-btn" class="btn btn-small btn-success">Confirm & Create</button>
