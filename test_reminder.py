@@ -199,7 +199,9 @@ def test_email_reminder(days_offset=0):
                         todos_due,
                         overdue_deals_data,
                         overdue_tasks,
-                        overdue_todos
+                        overdue_todos,
+                        HUBSPOT_PORTAL_ID,
+                        NOTION_TODOS_DB_ID
                     )
 
                     # Build subject

@@ -371,6 +371,91 @@ def format_deal_for_email(deal: Dict, contacts: List[Dict], stage_label: str, po
     }
 
 
+def fetch_hubspot_object_names(api_key: str, object_type: str, object_ids: List[str]) -> Dict[str, str]:
+    """
+    Fetch names for HubSpot objects (contacts, companies, deals) by their IDs
+
+    Args:
+        api_key (str): HubSpot API key
+        object_type (str): Type of object ('contacts', 'companies', 'deals')
+        object_ids (List[str]): List of object IDs to fetch
+
+    Returns:
+        Dict[str, str]: Mapping of object_id -> name
+    """
+    if not object_ids:
+        return {}
+
+    try:
+        # Determine the name property based on object type
+        name_properties = {
+            'contacts': ['firstname', 'lastname', 'email'],
+            'companies': ['name'],
+            'deals': ['dealname']
+        }
+
+        properties = name_properties.get(object_type, ['name'])
+
+        # Batch fetch objects
+        url = f"{HUBSPOT_API_BASE}/crm/v3/objects/{object_type}/batch/read"
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+
+        payload = {
+            'properties': properties,
+            'inputs': [{'id': obj_id} for obj_id in object_ids]
+        }
+
+        response = requests.post(url, json=payload, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get('results', [])
+
+            name_map = {}
+            for obj in results:
+                obj_id = obj.get('id')
+                props = obj.get('properties', {})
+
+                if object_type == 'contacts':
+                    # Build contact name
+                    firstname = props.get('firstname', '')
+                    lastname = props.get('lastname', '')
+                    email = props.get('email', '')
+
+                    if firstname and lastname:
+                        name = f"{firstname} {lastname}"
+                    elif firstname:
+                        name = firstname
+                    elif lastname:
+                        name = lastname
+                    elif email:
+                        name = email
+                    else:
+                        name = f"Contact {obj_id}"
+
+                    name_map[obj_id] = name
+
+                elif object_type == 'companies':
+                    name = props.get('name', f"Company {obj_id}")
+                    name_map[obj_id] = name
+
+                elif object_type == 'deals':
+                    name = props.get('dealname', f"Deal {obj_id}")
+                    name_map[obj_id] = name
+
+            return name_map
+        else:
+            logger.error(f"Error fetching {object_type} names: {response.status_code} - {response.text}")
+            return {}
+
+    except Exception as e:
+        logger.error(f"Error fetching {object_type} names: {str(e)}", exc_info=True)
+        return {}
+
+
 def get_hubspot_tasks_due_on_date(api_key: str, target_date: datetime, portal_id: str = None) -> List[Dict]:
     """
     Fetch HubSpot tasks due on a specific date
@@ -424,6 +509,7 @@ def get_hubspot_tasks_due_on_date(api_key: str, target_date: datetime, portal_id
                 "hs_timestamp",
                 "hubspot_owner_id"
             ],
+            "associations": ["contacts", "companies", "deals"],
             "limit": 100
         }
 
@@ -434,11 +520,31 @@ def get_hubspot_tasks_due_on_date(api_key: str, target_date: datetime, portal_id
             data = response.json()
             tasks = data.get('results', [])
 
+            # Collect all unique IDs for batch fetching names
+            all_contact_ids = set()
+            all_company_ids = set()
+            all_deal_ids = set()
+
+            for task in tasks:
+                associations = task.get('associations', {})
+                for contact in associations.get('contacts', {}).get('results', []):
+                    all_contact_ids.add(contact.get('id'))
+                for company in associations.get('companies', {}).get('results', []):
+                    all_company_ids.add(company.get('id'))
+                for deal in associations.get('deals', {}).get('results', []):
+                    all_deal_ids.add(deal.get('id'))
+
+            # Batch fetch all names
+            contact_names = fetch_hubspot_object_names(api_key, 'contacts', list(all_contact_ids))
+            company_names = fetch_hubspot_object_names(api_key, 'companies', list(all_company_ids))
+            deal_names = fetch_hubspot_object_names(api_key, 'deals', list(all_deal_ids))
+
             # Format tasks for email
             formatted_tasks = []
             for task in tasks:
                 props = task.get('properties', {})
                 task_id = task.get('id')
+                associations = task.get('associations', {})
 
                 # Format due date
                 due_timestamp = props.get('hs_timestamp', '')
@@ -450,10 +556,41 @@ def get_hubspot_tasks_due_on_date(api_key: str, target_date: datetime, portal_id
                     except (ValueError, TypeError):
                         due_date_formatted = due_timestamp
 
-                # Construct task URL
+                # Get associations with names
+                associated_contacts = []
+                for contact in associations.get('contacts', {}).get('results', []):
+                    contact_id = contact.get('id')
+                    associated_contacts.append({
+                        'id': contact_id,
+                        'name': contact_names.get(contact_id, f'Contact {contact_id}')
+                    })
+
+                associated_companies = []
+                for company in associations.get('companies', {}).get('results', []):
+                    company_id = company.get('id')
+                    associated_companies.append({
+                        'id': company_id,
+                        'name': company_names.get(company_id, f'Company {company_id}')
+                    })
+
+                associated_deals = []
+                for deal in associations.get('deals', {}).get('results', []):
+                    deal_id = deal.get('id')
+                    associated_deals.append({
+                        'id': deal_id,
+                        'name': deal_names.get(deal_id, f'Deal {deal_id}')
+                    })
+
+                # Construct task URL - new format with contact record
                 task_url = None
                 if portal_id and task_id:
-                    task_url = f"https://app.hubspot.com/contacts/{portal_id}/task/{task_id}"
+                    # If there's an associated contact, use the contact record URL format
+                    if associated_contacts:
+                        contact_id = associated_contacts[0].get('id')
+                        task_url = f"https://app.hubspot.com/contacts/{portal_id}/record/0-1/{contact_id}?taskId={task_id}"
+                    else:
+                        # Fallback to task-only URL if no contact
+                        task_url = f"https://app.hubspot.com/contacts/{portal_id}/task/{task_id}"
 
                 formatted_tasks.append({
                     'id': task_id,
@@ -462,7 +599,10 @@ def get_hubspot_tasks_due_on_date(api_key: str, target_date: datetime, portal_id
                     'status': props.get('hs_task_status', 'NOT_STARTED'),
                     'priority': props.get('hs_task_priority', 'NONE'),
                     'due_date': due_date_formatted,
-                    'url': task_url
+                    'url': task_url,
+                    'associated_contacts': associated_contacts,
+                    'associated_companies': associated_companies,
+                    'associated_deals': associated_deals
                 })
 
             logger.info(f"Found {len(formatted_tasks)} HubSpot task(s) due on {target_date.strftime('%Y-%m-%d')}")
@@ -522,6 +662,7 @@ def get_overdue_hubspot_tasks(api_key: str, portal_id: str = None) -> List[Dict]
                 "hs_timestamp",
                 "hubspot_owner_id"
             ],
+            "associations": ["contacts", "companies", "deals"],
             "limit": 100
         }
 
@@ -532,11 +673,31 @@ def get_overdue_hubspot_tasks(api_key: str, portal_id: str = None) -> List[Dict]
             data = response.json()
             tasks = data.get('results', [])
 
+            # Collect all unique IDs for batch fetching names
+            all_contact_ids = set()
+            all_company_ids = set()
+            all_deal_ids = set()
+
+            for task in tasks:
+                associations = task.get('associations', {})
+                for contact in associations.get('contacts', {}).get('results', []):
+                    all_contact_ids.add(contact.get('id'))
+                for company in associations.get('companies', {}).get('results', []):
+                    all_company_ids.add(company.get('id'))
+                for deal in associations.get('deals', {}).get('results', []):
+                    all_deal_ids.add(deal.get('id'))
+
+            # Batch fetch all names
+            contact_names = fetch_hubspot_object_names(api_key, 'contacts', list(all_contact_ids))
+            company_names = fetch_hubspot_object_names(api_key, 'companies', list(all_company_ids))
+            deal_names = fetch_hubspot_object_names(api_key, 'deals', list(all_deal_ids))
+
             # Format tasks for email
             formatted_tasks = []
             for task in tasks:
                 props = task.get('properties', {})
                 task_id = task.get('id')
+                associations = task.get('associations', {})
 
                 # Format due date
                 due_timestamp = props.get('hs_timestamp', '')
@@ -548,10 +709,41 @@ def get_overdue_hubspot_tasks(api_key: str, portal_id: str = None) -> List[Dict]
                     except (ValueError, TypeError):
                         due_date_formatted = due_timestamp
 
-                # Construct task URL
+                # Get associations with names
+                associated_contacts = []
+                for contact in associations.get('contacts', {}).get('results', []):
+                    contact_id = contact.get('id')
+                    associated_contacts.append({
+                        'id': contact_id,
+                        'name': contact_names.get(contact_id, f'Contact {contact_id}')
+                    })
+
+                associated_companies = []
+                for company in associations.get('companies', {}).get('results', []):
+                    company_id = company.get('id')
+                    associated_companies.append({
+                        'id': company_id,
+                        'name': company_names.get(company_id, f'Company {company_id}')
+                    })
+
+                associated_deals = []
+                for deal in associations.get('deals', {}).get('results', []):
+                    deal_id = deal.get('id')
+                    associated_deals.append({
+                        'id': deal_id,
+                        'name': deal_names.get(deal_id, f'Deal {deal_id}')
+                    })
+
+                # Construct task URL - new format with contact record
                 task_url = None
                 if portal_id and task_id:
-                    task_url = f"https://app.hubspot.com/contacts/{portal_id}/task/{task_id}"
+                    # If there's an associated contact, use the contact record URL format
+                    if associated_contacts:
+                        contact_id = associated_contacts[0].get('id')
+                        task_url = f"https://app.hubspot.com/contacts/{portal_id}/record/0-1/{contact_id}?taskId={task_id}"
+                    else:
+                        # Fallback to task-only URL if no contact
+                        task_url = f"https://app.hubspot.com/contacts/{portal_id}/task/{task_id}"
 
                 formatted_tasks.append({
                     'id': task_id,
@@ -561,6 +753,9 @@ def get_overdue_hubspot_tasks(api_key: str, portal_id: str = None) -> List[Dict]
                     'priority': props.get('hs_task_priority', 'NONE'),
                     'due_date': due_date_formatted,
                     'url': task_url,
+                    'associated_contacts': associated_contacts,
+                    'associated_companies': associated_companies,
+                    'associated_deals': associated_deals,
                     'overdue': True
                 })
 
@@ -598,13 +793,29 @@ def get_notion_todos_due_on_date(notion_api_key: str, notion_db_id: str, target_
         # Format target date for Notion (YYYY-MM-DD)
         target_date_str = target_date.strftime('%Y-%m-%d')
 
-        # Query for todos due on target date
+        # Query for todos due on target date, excluding completed statuses
         payload = {
             "filter": {
-                "property": "Manual Due",
-                "date": {
-                    "equals": target_date_str
-                }
+                "and": [
+                    {
+                        "property": "Manual Due",
+                        "date": {
+                            "equals": target_date_str
+                        }
+                    },
+                    {
+                        "property": "Status",
+                        "status": {
+                            "does_not_equal": "Done"
+                        }
+                    },
+                    {
+                        "property": "Status",
+                        "status": {
+                            "does_not_equal": "Cancelled"
+                        }
+                    }
+                ]
             }
         }
 
@@ -667,8 +878,21 @@ def get_overdue_notion_todos(notion_api_key: str, notion_db_id: str) -> List[Dic
     Returns:
         List[Dict]: List of overdue to-dos
     """
+    # Validate inputs
+    if not notion_api_key or not notion_db_id:
+        logger.warning("Missing Notion API key or database ID for overdue to-dos")
+        return []
+
     try:
-        url = f"{NOTION_API_BASE}/databases/{notion_db_id}/query"
+        # Normalize database ID (remove dashes if present, add them back in correct format)
+        db_id_clean = notion_db_id.replace('-', '')
+        if len(db_id_clean) == 32:
+            # Format as UUID: 8-4-4-4-12
+            notion_db_id_formatted = f"{db_id_clean[:8]}-{db_id_clean[8:12]}-{db_id_clean[12:16]}-{db_id_clean[16:20]}-{db_id_clean[20:]}"
+        else:
+            notion_db_id_formatted = notion_db_id
+
+        url = f"{NOTION_API_BASE}/databases/{notion_db_id_formatted}/query"
         headers = {
             'Authorization': f'Bearer {notion_api_key}',
             'Content-Type': 'application/json',
@@ -679,17 +903,33 @@ def get_overdue_notion_todos(notion_api_key: str, notion_db_id: str) -> List[Dic
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         today_str = today.strftime('%Y-%m-%d')
 
-        # Query for todos with due date before today
+        # Query for todos with due date before today, excluding completed statuses
         payload = {
             "filter": {
-                "property": "Manual Due",
-                "date": {
-                    "before": today_str
-                }
+                "and": [
+                    {
+                        "property": "Manual Due",
+                        "date": {
+                            "before": today_str
+                        }
+                    },
+                    {
+                        "property": "Status",
+                        "status": {
+                            "does_not_equal": "Done"
+                        }
+                    },
+                    {
+                        "property": "Status",
+                        "status": {
+                            "does_not_equal": "Cancelled"
+                        }
+                    }
+                ]
             }
         }
 
-        logger.info("Fetching overdue Notion to-dos")
+        logger.info(f"Fetching overdue Notion to-dos from database: {notion_db_id_formatted}")
         response = requests.post(url, json=payload, headers=headers)
 
         if response.status_code == 200:
@@ -744,13 +984,22 @@ def build_email_html(
     todos_data: List[Dict] = None,
     overdue_deals: List[Dict] = None,
     overdue_tasks: List[Dict] = None,
-    overdue_todos: List[Dict] = None
+    overdue_todos: List[Dict] = None,
+    portal_id: str = None,
+    notion_db_id: str = None
 ) -> str:
     """
     Build HTML email body from formatted deals data
 
     Args:
         deals_data (List[Dict]): List of formatted deal data
+        tasks_data (List[Dict]): List of HubSpot tasks
+        todos_data (List[Dict]): List of Notion to-dos
+        overdue_deals (List[Dict]): List of overdue deals
+        overdue_tasks (List[Dict]): List of overdue tasks
+        overdue_todos (List[Dict]): List of overdue to-dos
+        portal_id (str): HubSpot portal ID for task list URL
+        notion_db_id (str): Notion database ID for to-do list URL
 
     Returns:
         str: HTML email body
@@ -848,6 +1097,27 @@ def build_email_html(
         <div style="padding: 20px;">
     """
 
+    # Add quick links to full task lists
+    html += '<div style="background-color: #f0f9ff; border: 1px solid #0078d4; border-radius: 5px; padding: 15px; margin-bottom: 20px;">'
+    html += '<p style="margin: 0 0 10px 0; font-weight: bold; color: #0078d4;">📋 View All Tasks:</p>'
+    html += '<div style="margin-left: 10px;">'
+
+    if portal_id:
+        html += f'<div style="margin: 5px 0;">• <a href="https://app.hubspot.com/tasks/{portal_id}/view/51902656" style="color: #0078d4;">HubSpot Tasks</a></div>'
+
+    if notion_db_id:
+        # Format Notion database ID for URL (remove dashes)
+        db_id_clean = notion_db_id.replace('-', '')
+        if len(db_id_clean) == 32:
+            db_id_formatted = f"{db_id_clean[:8]}{db_id_clean[8:12]}{db_id_clean[12:16]}{db_id_clean[16:20]}{db_id_clean[20:]}"
+        else:
+            db_id_formatted = db_id_clean
+        html += f'<div style="margin: 5px 0;">• <a href="https://www.notion.so/devcap/{db_id_formatted}?v=20aaba4f880380b3827e000cc8f74de2" style="color: #0078d4;">Notion To-Dos</a></div>'
+
+    html += '</div></div>'
+    html += """
+    """
+
     # Initialize lists as empty if None
     if deals_data is None:
         deals_data = []
@@ -934,17 +1204,11 @@ def build_email_html(
                 <h3 style="color: #dc2626;">✅ Overdue HubSpot Tasks ({len(overdue_tasks)})</h3>
             """
             for task in overdue_tasks:
-                task_url = task.get('url')
                 task_subject = task.get('subject', 'Untitled Task')
-
-                if task_url:
-                    task_subject_html = f'<a href="{task_url}">{task_subject}</a>'
-                else:
-                    task_subject_html = task_subject
 
                 html += f"""
                     <div class="deal overdue">
-                        <div class="deal-name overdue">{task_subject_html}<span class="overdue-badge">OVERDUE</span></div>
+                        <div class="deal-name overdue">{task_subject}<span class="overdue-badge">OVERDUE</span></div>
                 """
 
                 if task.get('body'):
@@ -964,6 +1228,75 @@ def build_email_html(
                             <span class="field-label">Status:</span>
                             <span>{task.get('status', 'NOT_STARTED')}</span>
                         </div>
+                """
+
+                # Add associated contacts
+                associated_contacts = task.get('associated_contacts', [])
+                if associated_contacts:
+                    html += """
+                        <div class="deal-field">
+                            <span class="field-label">Contacts:</span>
+                        </div>
+                        <div class="contacts-list">
+                    """
+                    portal_id = task.get('url', '').split('/contacts/')[1].split('/')[0] if task.get('url') and '/contacts/' in task.get('url') else None
+                    for contact in associated_contacts:
+                        contact_id = contact.get('id')
+                        contact_name = contact.get('name', contact_id)
+                        contact_url = f'https://app.hubspot.com/contacts/{portal_id}/record/0-1/{contact_id}' if portal_id and contact_id else None
+                        if contact_url:
+                            html += f'<div class="contact-item">• <a href="{contact_url}" style="color: #0078d4;">{contact_name}</a></div>'
+                        else:
+                            html += f'<div class="contact-item">• {contact_name}</div>'
+                    html += """
+                        </div>
+                    """
+
+                # Add associated companies
+                associated_companies = task.get('associated_companies', [])
+                if associated_companies:
+                    html += """
+                        <div class="deal-field">
+                            <span class="field-label">Companies:</span>
+                        </div>
+                        <div class="contacts-list">
+                    """
+                    portal_id = task.get('url', '').split('/contacts/')[1].split('/')[0] if task.get('url') and '/contacts/' in task.get('url') else None
+                    for company in associated_companies:
+                        company_id = company.get('id')
+                        company_name = company.get('name', company_id)
+                        company_url = f'https://app.hubspot.com/contacts/{portal_id}/record/0-2/{company_id}' if portal_id and company_id else None
+                        if company_url:
+                            html += f'<div class="contact-item">• <a href="{company_url}" style="color: #0078d4;">{company_name}</a></div>'
+                        else:
+                            html += f'<div class="contact-item">• {company_name}</div>'
+                    html += """
+                        </div>
+                    """
+
+                # Add associated deals
+                associated_deals = task.get('associated_deals', [])
+                if associated_deals:
+                    html += """
+                        <div class="deal-field">
+                            <span class="field-label">Deals:</span>
+                        </div>
+                        <div class="contacts-list">
+                    """
+                    portal_id = task.get('url', '').split('/contacts/')[1].split('/')[0] if task.get('url') and '/contacts/' in task.get('url') else None
+                    for deal in associated_deals:
+                        deal_id = deal.get('id')
+                        deal_name = deal.get('name', deal_id)
+                        deal_url = f'https://app.hubspot.com/contacts/{portal_id}/record/0-3/{deal_id}' if portal_id and deal_id else None
+                        if deal_url:
+                            html += f'<div class="contact-item">• <a href="{deal_url}" style="color: #0078d4;">{deal_name}</a></div>'
+                        else:
+                            html += f'<div class="contact-item">• {deal_name}</div>'
+                    html += """
+                        </div>
+                    """
+
+                html += """
                     </div>
                 """
 
@@ -1074,13 +1407,7 @@ def build_email_html(
         """
 
         for task in tasks_data:
-            task_url = task.get('url')
             task_subject = task.get('subject', 'Untitled Task')
-
-            if task_url:
-                task_subject_html = f'<a href="{task_url}">{task_subject}</a>'
-            else:
-                task_subject_html = task_subject
 
             priority_badge = ''
             if task.get('priority') == 'HIGH':
@@ -1088,7 +1415,7 @@ def build_email_html(
 
             html += f"""
                 <div class="deal">
-                    <div class="deal-name">{task_subject_html}{priority_badge}</div>
+                    <div class="deal-name">{task_subject}{priority_badge}</div>
             """
 
             if task.get('body'):
@@ -1108,6 +1435,75 @@ def build_email_html(
                         <span class="field-label">Status:</span>
                         <span>{task.get('status', 'NOT_STARTED')}</span>
                     </div>
+            """
+
+            # Add associated contacts
+            associated_contacts = task.get('associated_contacts', [])
+            if associated_contacts:
+                html += """
+                    <div class="deal-field">
+                        <span class="field-label">Contacts:</span>
+                    </div>
+                    <div class="contacts-list">
+                """
+                portal_id = task.get('url', '').split('/contacts/')[1].split('/')[0] if task.get('url') and '/contacts/' in task.get('url') else None
+                for contact in associated_contacts:
+                    contact_id = contact.get('id')
+                    contact_name = contact.get('name', contact_id)
+                    contact_url = f'https://app.hubspot.com/contacts/{portal_id}/record/0-1/{contact_id}' if portal_id and contact_id else None
+                    if contact_url:
+                        html += f'<div class="contact-item">• <a href="{contact_url}" style="color: #0078d4;">{contact_name}</a></div>'
+                    else:
+                        html += f'<div class="contact-item">• {contact_name}</div>'
+                html += """
+                    </div>
+                """
+
+            # Add associated companies
+            associated_companies = task.get('associated_companies', [])
+            if associated_companies:
+                html += """
+                    <div class="deal-field">
+                        <span class="field-label">Companies:</span>
+                    </div>
+                    <div class="contacts-list">
+                """
+                portal_id = task.get('url', '').split('/contacts/')[1].split('/')[0] if task.get('url') and '/contacts/' in task.get('url') else None
+                for company in associated_companies:
+                    company_id = company.get('id')
+                    company_name = company.get('name', company_id)
+                    company_url = f'https://app.hubspot.com/contacts/{portal_id}/record/0-2/{company_id}' if portal_id and company_id else None
+                    if company_url:
+                        html += f'<div class="contact-item">• <a href="{company_url}" style="color: #0078d4;">{company_name}</a></div>'
+                    else:
+                        html += f'<div class="contact-item">• {company_name}</div>'
+                html += """
+                    </div>
+                """
+
+            # Add associated deals
+            associated_deals = task.get('associated_deals', [])
+            if associated_deals:
+                html += """
+                    <div class="deal-field">
+                        <span class="field-label">Deals:</span>
+                    </div>
+                    <div class="contacts-list">
+                """
+                portal_id = task.get('url', '').split('/contacts/')[1].split('/')[0] if task.get('url') and '/contacts/' in task.get('url') else None
+                for deal in associated_deals:
+                    deal_id = deal.get('id')
+                    deal_name = deal.get('name', deal_id)
+                    deal_url = f'https://app.hubspot.com/contacts/{portal_id}/record/0-3/{deal_id}' if portal_id and deal_id else None
+                    if deal_url:
+                        html += f'<div class="contact-item">• <a href="{deal_url}" style="color: #0078d4;">{deal_name}</a></div>'
+                    else:
+                        html += f'<div class="contact-item">• {deal_name}</div>'
+                html += """
+                    </div>
+                """
+
+            html += """
                 </div>
             """
 
@@ -1337,7 +1733,9 @@ def send_daily_deal_reminders(
             todos_due_tomorrow,
             overdue_deals_data,
             overdue_tasks_list,
-            overdue_todos_list
+            overdue_todos_list,
+            hubspot_portal_id,
+            notion_todos_db_id
         )
 
         # Step 8: Send email

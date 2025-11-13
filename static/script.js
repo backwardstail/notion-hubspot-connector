@@ -105,7 +105,7 @@ const hubspotActionsCard = document.getElementById('hubspot-actions-card');
 const selectedContactNameDisplay = document.getElementById('selected-contact-name-display');
 const hubspotActionRadios = document.querySelectorAll('input[name="hubspot-action"]');
 const dealSelection = document.getElementById('deal-selection');
-const dealDropdown = document.getElementById('deal-dropdown');
+const contactDealCheckboxesContainer = document.getElementById('contact-deal-checkboxes-container');
 const dealSelectionStatus = document.getElementById('deal-selection-status');
 const dealSearchInput = document.getElementById('deal-search-input');
 const searchDealsBtn = document.getElementById('search-deals-btn');
@@ -190,10 +190,9 @@ hubspotActionRadios.forEach(radio => {
     radio.addEventListener('change', handleHubSpotActionChange);
 });
 
-// Deal dropdown event listeners
-dealDropdown.addEventListener('change', handleDealSelection);
+// Deal event listeners
+// Note: Both contact-associated deals and search results use checkboxes with handleDealCheckboxChange
 searchDealsBtn.addEventListener('click', handleSearchDeals);
-// dealSearchDropdown removed - now using checkboxes with handleDealCheckboxChange
 createDealBtn.addEventListener('click', handleCreateDeal);
 
 // Master action checkbox event listeners
@@ -1362,8 +1361,7 @@ async function handleHubSpotActionChange(e) {
     if (hubspotAction === 'log_with_deal') {
         // Show deal selection and fetch deals
         dealSelection.classList.remove('hidden');
-        dealDropdown.innerHTML = '<option value="">Loading deals...</option>';
-        dealDropdown.disabled = true;
+        contactDealCheckboxesContainer.innerHTML = '<p style="color: #64748b;">Loading deals...</p>';
         dealSelectionStatus.textContent = '';
         dealSelectionStatus.className = 'deal-status';
 
@@ -1400,37 +1398,52 @@ async function fetchDealsForContact(contactId) {
 
         const deals = data.deals || [];
 
-        // Populate dropdown
-        dealDropdown.innerHTML = '';
+        // Clear container
+        contactDealCheckboxesContainer.innerHTML = '';
 
         if (deals.length === 0) {
-            dealDropdown.innerHTML = '<option value="">No deals found for this contact</option>';
-            dealSelectionStatus.textContent = '⚠️ No deals found. You can still log the note without deal association by selecting "Log call note only".';
+            contactDealCheckboxesContainer.innerHTML = '<p style="color: #64748b; font-size: 0.9rem;">No deals found for this contact</p>';
+            dealSelectionStatus.textContent = '⚠️ No deals found. You can still log the note by selecting other deals via search.';
             dealSelectionStatus.className = 'deal-status warning';
-            dealDropdown.disabled = true;
         } else {
-            dealDropdown.innerHTML = '<option value="">Select a deal...</option>';
+            // Populate checkboxes - these feed into the same master selectedDeals array
             deals.forEach(deal => {
-                const option = document.createElement('option');
-                option.value = deal.id;
-                option.dealData = deal; // Attach full deal data to the option
-                // Format: "Deal Name - $Amount - Stage"
                 const amount = deal.amount ? `$${parseFloat(deal.amount).toLocaleString()}` : '$0';
                 const stageDisplay = getDealStageDisplayName(deal.stage) || 'Unknown';
-                option.textContent = `${deal.name || 'Unnamed Deal'} - ${amount} - ${stageDisplay}`;
-                dealDropdown.appendChild(option);
+
+                const checkboxItem = document.createElement('div');
+                checkboxItem.className = 'deal-checkbox-item';
+                checkboxItem.innerHTML = `
+                    <input
+                        type="checkbox"
+                        id="contact-deal-${deal.id}"
+                        value="${deal.id}"
+                        data-deal-data='${JSON.stringify(deal)}'
+                    >
+                    <label for="contact-deal-${deal.id}">
+                        <div class="deal-checkbox-label">
+                            <div class="deal-name">${deal.name || 'Unnamed Deal'}</div>
+                            <div class="deal-details">${amount} • ${stageDisplay}</div>
+                        </div>
+                    </label>
+                `;
+
+                // Add event listener - uses the same handler as search results
+                const checkbox = checkboxItem.querySelector('input[type="checkbox"]');
+                checkbox.addEventListener('change', handleDealCheckboxChange);
+
+                contactDealCheckboxesContainer.appendChild(checkboxItem);
             });
-            dealSelectionStatus.textContent = `✓ Found ${deals.length} deal(s)`;
+
+            dealSelectionStatus.textContent = `✓ Found ${deals.length} deal(s) associated with this contact`;
             dealSelectionStatus.className = 'deal-status success';
-            dealDropdown.disabled = false;
         }
 
     } catch (error) {
         console.error('Error fetching deals:', error);
-        dealDropdown.innerHTML = '<option value="">Unable to load deals</option>';
-        dealSelectionStatus.textContent = `⚠️ Unable to load deals. You can still log the note without deal association by selecting "Log call note only".`;
+        contactDealCheckboxesContainer.innerHTML = '<p style="color: #dc2626; font-size: 0.9rem;">Unable to load deals</p>';
+        dealSelectionStatus.textContent = '⚠️ Unable to load deals. You can still log the note by selecting other deals via search.';
         dealSelectionStatus.className = 'deal-status warning';
-        dealDropdown.disabled = true;
     }
 }
 
@@ -1960,32 +1973,33 @@ function updateExecutionSummary() {
         executionSummaryList.appendChild(li);
     } else if (selectedContactName && selectedContactId) {
         // HubSpot contact selected
-        if (hubspotAction === 'log_with_deal') {
-            // Log with deal
-            const selectedDeal = dealDropdown?.options[dealDropdown.selectedIndex];
-            if (selectedDeal && selectedDeal.value) {
-                const li = document.createElement('li');
-                li.className = 'success';
-                li.innerHTML = `Will log call note to <strong>${selectedContactName}</strong> and associate with deal: <strong>${selectedDeal.text}</strong>`;
-                executionSummaryList.appendChild(li);
-            } else {
-                const li = document.createElement('li');
-                li.className = 'success';
-                li.innerHTML = `Will log call note to <strong>${selectedContactName}</strong> (select a deal above)`;
-                executionSummaryList.appendChild(li);
-            }
-        } else {
-            // Log only
-            const li = document.createElement('li');
-            li.className = 'success';
-            li.innerHTML = `Will log call note to <strong>${selectedContactName}</strong>`;
-            executionSummaryList.appendChild(li);
-        }
+        const li = document.createElement('li');
+        li.className = 'success';
+        li.innerHTML = `Will log call note to <strong>${selectedContactName}</strong>`;
+        executionSummaryList.appendChild(li);
+    } else if (selectedDeals.length > 0) {
+        // Deals selected (without contact)
+        const li = document.createElement('li');
+        li.className = 'success';
+        li.innerHTML = `Will log call note to <strong>${selectedDeals.length}</strong> deal(s)`;
+        executionSummaryList.appendChild(li);
     } else if (!skipHubspot) {
-        // No contact selected yet
+        // No contact or deals selected yet
         const li = document.createElement('li');
         li.className = 'warning';
-        li.innerHTML = 'HubSpot contact not yet selected';
+        li.innerHTML = 'HubSpot contact or deal(s) not yet selected';
+        executionSummaryList.appendChild(li);
+    }
+
+    // Show selected deals summary
+    if (selectedDeals.length > 0) {
+        const li = document.createElement('li');
+        li.className = 'success';
+        if (selectedDeals.length === 1) {
+            li.innerHTML = `Will update <strong>${selectedDeals[0].name}</strong>`;
+        } else {
+            li.innerHTML = `Will update <strong>${selectedDeals.length}</strong> selected deal(s)`;
+        }
         executionSummaryList.appendChild(li);
     }
 
