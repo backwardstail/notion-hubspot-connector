@@ -78,7 +78,9 @@ def run_daily_reminder_job():
             smtp_port=SMTP_PORT,
             smtp_username=SMTP_USERNAME,
             smtp_password=SMTP_PASSWORD,
-            from_email=REMINDER_EMAIL_FROM
+            from_email=REMINDER_EMAIL_FROM,
+            notion_api_key=NOTION_API_KEY,
+            notion_todos_db_id=NOTION_TODOS_DB_ID
         )
 
         if result['success']:
@@ -94,6 +96,21 @@ def run_daily_reminder_job():
 def home():
     """Serve the main frontend page"""
     return render_template('index.html')
+
+
+@app.route('/health')
+def health():
+    """
+    Health check endpoint for external monitoring services.
+    This endpoint is used to keep the Render instance awake and ensure
+    the background scheduler is running.
+    """
+    scheduler_status = "running" if scheduler.running else "stopped"
+    return jsonify({
+        'status': 'ok',
+        'scheduler': scheduler_status,
+        'reminder_enabled': REMINDER_ENABLED
+    }), 200
 
 
 @app.route('/api/process-notes', methods=['POST'])
@@ -672,47 +689,94 @@ def confirm_and_execute():
                 # Format summary for note
                 summary_text = '\n'.join([f'• {bullet}' for bullet in summary])
 
-                # Use deal_id if provided (from frontend, always send if we have one)
-                note_deal_id = deal_id
+                # Handle multiple deals
+                deals_list = hubspot_data.get('deals', [])
+                results['hubspot']['deals'] = []  # Track all deal operations
 
-                note_result = log_hubspot_note(
-                    contact_id,  # Can be None if only logging to deal
-                    summary_text,
-                    raw_notes,
-                    HUBSPOT_API_KEY,
-                    deal_id=note_deal_id
-                )
+                if len(deals_list) > 0:
+                    # Log notes to multiple deals
+                    logger.info(f"Logging notes to {len(deals_list)} deal(s)")
 
-                if note_result['success']:
-                    results['hubspot']['note_id'] = note_result['data']['id']
-                    results['hubspot']['action_taken'] = hubspot_action
-                    results['hubspot']['deal_id'] = note_deal_id
+                    for deal_data in deals_list:
+                        deal_id = deal_data.get('deal_id')
+                        deal_name = deal_data.get('deal_name', 'Unknown Deal')
+                        deal_updates = deal_data.get('updates', {})
 
-                    logger.info(f"Created HubSpot note: {results['hubspot']['note_id']}, Action: {hubspot_action}, Deal: {note_deal_id}")
+                        deal_result = {
+                            'deal_id': deal_id,
+                            'deal_name': deal_name,
+                            'note_created': False,
+                            'note_id': None,
+                            'updated': False,
+                            'error': None
+                        }
 
-                    # Update deal properties if provided and we have a deal ID
-                    if note_deal_id and deal_updates:
                         try:
-                            # Filter out empty values
-                            properties_to_update = {k: v for k, v in deal_updates.items() if v}
+                            # Log note to this deal
+                            note_result = log_hubspot_note(
+                                contact_id,  # Can be None if only logging to deal
+                                summary_text,
+                                raw_notes,
+                                HUBSPOT_API_KEY,
+                                deal_id=deal_id
+                            )
 
-                            if properties_to_update:
-                                logger.info(f"Updating deal {note_deal_id} with properties: {properties_to_update}")
-                                deal_update_result = update_hubspot_deal(note_deal_id, properties_to_update, HUBSPOT_API_KEY)
+                            if note_result['success']:
+                                deal_result['note_created'] = True
+                                deal_result['note_id'] = note_result['data']['id']
+                                logger.info(f"Created note for deal '{deal_name}' (ID: {deal_id})")
 
-                                if deal_update_result['success']:
-                                    results['hubspot']['deal_updated'] = True
-                                    logger.info(f"Successfully updated deal {note_deal_id}")
-                                else:
-                                    results['hubspot']['deal_update_error'] = deal_update_result['error']
-                                    logger.warning(f"Failed to update deal {note_deal_id}: {deal_update_result['error']}")
-                        except Exception as deal_update_error:
-                            logger.error(f"Error updating deal: {str(deal_update_error)}", exc_info=True)
-                            results['hubspot']['deal_update_error'] = str(deal_update_error)
+                                # Update deal properties if provided
+                                if deal_updates:
+                                    properties_to_update = {k: v for k, v in deal_updates.items() if v}
+
+                                    if properties_to_update:
+                                        logger.info(f"Updating deal {deal_id} with properties: {properties_to_update}")
+                                        deal_update_result = update_hubspot_deal(deal_id, properties_to_update, HUBSPOT_API_KEY)
+
+                                        if deal_update_result['success']:
+                                            deal_result['updated'] = True
+                                            logger.info(f"Successfully updated deal {deal_id}")
+                                        else:
+                                            deal_result['error'] = f"Update failed: {deal_update_result['error']}"
+                                            logger.warning(f"Failed to update deal {deal_id}: {deal_update_result['error']}")
+                            else:
+                                deal_result['error'] = f"Note creation failed: {note_result['error']}"
+                                logger.error(f"Failed to create note for deal {deal_id}: {note_result['error']}")
+
+                        except Exception as deal_error:
+                            deal_result['error'] = str(deal_error)
+                            logger.error(f"Error processing deal {deal_id}: {str(deal_error)}", exc_info=True)
+
+                        results['hubspot']['deals'].append(deal_result)
+
+                    # Set overall status
+                    successful_deals = sum(1 for d in results['hubspot']['deals'] if d['note_created'])
+                    if successful_deals > 0:
+                        results['hubspot']['action_taken'] = f"logged_to_{successful_deals}_deals"
+                        logger.info(f"Successfully logged notes to {successful_deals}/{len(deals_list)} deal(s)")
+                    else:
+                        results['hubspot']['error'] = "Failed to log notes to any deals"
+                        results['errors'].append("Failed to log notes to any deals")
+
                 else:
-                    results['hubspot']['error'] = note_result['error']
-                    results['errors'].append(f"HubSpot note failed: {note_result['error']}")
-                    logger.error(f"Failed to create HubSpot note: {note_result['error']}")
+                    # No deals, just log to contact
+                    note_result = log_hubspot_note(
+                        contact_id,
+                        summary_text,
+                        raw_notes,
+                        HUBSPOT_API_KEY,
+                        deal_id=None
+                    )
+
+                    if note_result['success']:
+                        results['hubspot']['note_id'] = note_result['data']['id']
+                        results['hubspot']['action_taken'] = 'log_only'
+                        logger.info(f"Created HubSpot note (contact only): {results['hubspot']['note_id']}")
+                    else:
+                        results['hubspot']['error'] = note_result['error']
+                        results['errors'].append(f"HubSpot note failed: {note_result['error']}")
+                        logger.error(f"Failed to create HubSpot note: {note_result['error']}")
 
             except Exception as e:
                 results['hubspot']['error'] = str(e)
@@ -865,8 +929,12 @@ def confirm_and_execute():
 
         # Build response with detailed execution summary
         # Determine overall success status
-        has_any_success = (
+        hubspot_success = (
             results['hubspot']['note_id'] or
+            (results['hubspot'].get('deals') and any(d.get('note_created') for d in results['hubspot']['deals']))
+        )
+        has_any_success = (
+            hubspot_success or
             results['notion']['investor_updated'] or
             results['notion']['todos_created'] > 0
         )

@@ -244,16 +244,25 @@
 
                             <!-- Search results -->
                             <div id="deal-search-results" class="deal-search-results hidden">
-                                <p class="info-text-small">Select a deal from the results:</p>
-                                <select id="deal-search-dropdown" class="deal-dropdown">
-                                    <option value="">Select a deal...</option>
-                                </select>
+                                <p class="info-text-small">Select deal(s) to log notes to:</p>
+                                <div id="deal-checkboxes-container" class="deal-checkboxes-container">
+                                    <!-- Deal checkboxes will be inserted here -->
+                                </div>
                             </div>
                         </div>
 
-                        <!-- Deal Details/Editor -->
-                        <div id="deal-details" class="deal-details hidden">
-                            <h4>Deal Details</h4>
+                        <!-- Selected Deals List -->
+                        <div id="selected-deals-list" class="selected-deals-list hidden">
+                            <h4>Selected Deals (<span id="selected-deals-count">0</span>)</h4>
+                            <p class="info-text-small">Notes will be logged to these deals. You can update next steps for each:</p>
+                            <div id="selected-deals-container">
+                                <!-- Selected deal cards will be inserted here -->
+                            </div>
+                        </div>
+
+                        <!-- Deal Creation Form (shown when no deals found) -->
+                        <div id="deal-creation-form" class="deal-details hidden">
+                            <h4>Create New Deal</h4>
                             <div class="deal-fields">
                                 <div class="form-group">
                                     <label for="deal-name">Deal Name:</label>
@@ -284,13 +293,12 @@
                                 </div>
                             </div>
                             <div class="deal-actions">
-                                <button id="create-deal-btn" class="btn btn-small btn-success hidden">
+                                <button id="create-deal-btn" class="btn btn-small btn-success">
                                     ➕ Create New Deal
                                 </button>
                                 <span id="create-deal-status" class="status-text"></span>
                             </div>
-                            <p class="info-text-small" id="deal-update-info">💡 These fields will be updated in HubSpot when you submit.</p>
-                            <p class="info-text-small hidden" id="deal-create-info">💡 A new deal will be created in HubSpot when you submit.</p>
+                            <p class="info-text-small" id="deal-create-info">💡 A new deal will be created and notes will be logged to it.</p>
                         </div>
                     </div>
 

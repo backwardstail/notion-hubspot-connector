@@ -7,8 +7,7 @@ let skipInvestorPrefs = false;
 let investorPageId = null;
 let selectedInvestorId = null;
 let selectedInvestorName = null;
-let selectedDealId = null;
-let selectedDealData = null; // Store full deal data including stage, next_step, etc.
+let selectedDeals = []; // Array of selected deals with their data and updates
 let hubspotAction = 'log_only'; // 'log_only', 'log_with_deal', or 'skip'
 
 // Store submission page action selections
@@ -112,8 +111,11 @@ const dealSearchInput = document.getElementById('deal-search-input');
 const searchDealsBtn = document.getElementById('search-deals-btn');
 const dealSearchStatus = document.getElementById('deal-search-status');
 const dealSearchResults = document.getElementById('deal-search-results');
-const dealSearchDropdown = document.getElementById('deal-search-dropdown');
-const dealDetails = document.getElementById('deal-details');
+const dealCheckboxesContainer = document.getElementById('deal-checkboxes-container');
+const selectedDealsList = document.getElementById('selected-deals-list');
+const selectedDealsContainer = document.getElementById('selected-deals-container');
+const selectedDealsCount = document.getElementById('selected-deals-count');
+const dealCreationForm = document.getElementById('deal-creation-form');
 const dealNameInput = document.getElementById('deal-name');
 const dealStageInput = document.getElementById('deal-stage');
 const dealNextStepInput = document.getElementById('deal-next-step');
@@ -191,7 +193,7 @@ hubspotActionRadios.forEach(radio => {
 // Deal dropdown event listeners
 dealDropdown.addEventListener('change', handleDealSelection);
 searchDealsBtn.addEventListener('click', handleSearchDeals);
-dealSearchDropdown.addEventListener('change', handleDealSearchSelection);
+// dealSearchDropdown removed - now using checkboxes with handleDealCheckboxChange
 createDealBtn.addEventListener('click', handleCreateDeal);
 
 // Master action checkbox event listeners
@@ -313,7 +315,7 @@ function displayPreview(preview) {
     skipHubspot = false;
     skipInvestorPrefs = false;
     investorPageId = null;
-    selectedDealId = null;
+    selectedDeals = [];
     hubspotAction = 'log_only';
 
     // Reset Future Task fields (clear old values to allow AI regeneration)
@@ -463,20 +465,39 @@ function displayParsedDeals(preview) {
 
     // Clear any previous search results
     dealSearchResults.classList.add('hidden');
-    dealSearchDropdown.innerHTML = '<option value="">Select a deal...</option>';
+    dealCheckboxesContainer.innerHTML = '';
     dealSearchInput.value = '';
     dealSearchStatus.textContent = '';
 
-    // If deals were found, populate the dropdown
+    // If deals were found, populate the checkboxes
     if (dealStatus === 'found' && deals.length > 0) {
         deals.forEach(deal => {
-            const option = document.createElement('option');
-            option.value = deal.id;
-            option.dealData = deal; // Attach full deal data
             const amount = deal.amount ? `$${parseFloat(deal.amount).toLocaleString()}` : '$0';
             const stageDisplay = getDealStageDisplayName(deal.stage) || 'Unknown';
-            option.textContent = `${deal.name || 'Unnamed Deal'} - ${amount} - ${stageDisplay}`;
-            dealSearchDropdown.appendChild(option);
+            const dealLabel = `${deal.name || 'Unnamed Deal'} - ${amount} - ${stageDisplay}`;
+
+            const checkboxItem = document.createElement('div');
+            checkboxItem.className = 'deal-checkbox-item';
+            checkboxItem.innerHTML = `
+                <input
+                    type="checkbox"
+                    id="deal-${deal.id}"
+                    value="${deal.id}"
+                    data-deal-data='${JSON.stringify(deal)}'
+                >
+                <label for="deal-${deal.id}">
+                    <div class="deal-checkbox-label">
+                        <div class="deal-name">${deal.name || 'Unnamed Deal'}</div>
+                        <div class="deal-details">${amount} • ${stageDisplay}</div>
+                    </div>
+                </label>
+            `;
+
+            // Add event listener to checkbox
+            const checkbox = checkboxItem.querySelector('input[type="checkbox"]');
+            checkbox.addEventListener('change', handleDealCheckboxChange);
+
+            dealCheckboxesContainer.appendChild(checkboxItem);
         });
 
         dealSearchResults.classList.remove('hidden');
@@ -1428,10 +1449,8 @@ function handleDealSelection(e) {
         if (dealData) {
             selectedDealData = dealData;
             populateDealFields(dealData);
-            dealDetails.classList.remove('hidden');
         }
     } else {
-        dealDetails.classList.add('hidden');
         selectedDealData = null;
     }
 
@@ -1448,10 +1467,10 @@ function populateDealFields(dealData) {
     dealNextStepDateInput.value = dealData.next_step_date || '';
 
     // Show update mode UI
-    dealNameInput.disabled = true; // Can't change deal name when updating
-    createDealBtn.classList.add('hidden');
-    dealUpdateInfo.classList.remove('hidden');
-    dealCreateInfo.classList.add('hidden');
+    if (dealNameInput) dealNameInput.disabled = true; // Can't change deal name when updating
+    if (createDealBtn) createDealBtn.classList.add('hidden');
+    if (dealUpdateInfo) dealUpdateInfo.classList.remove('hidden');
+    if (dealCreateInfo) dealCreateInfo.classList.add('hidden');
 }
 
 /**
@@ -1471,13 +1490,10 @@ function showDealCreationMode(suggestedData) {
     }
 
     // Show create mode UI
-    dealNameInput.disabled = false;
-    createDealBtn.classList.remove('hidden');
-    dealUpdateInfo.classList.add('hidden');
-    dealCreateInfo.classList.remove('hidden');
-
-    // Show the deal details section
-    dealDetails.classList.remove('hidden');
+    if (dealNameInput) dealNameInput.disabled = false;
+    if (createDealBtn) createDealBtn.classList.remove('hidden');
+    if (dealUpdateInfo) dealUpdateInfo.classList.add('hidden');
+    if (dealCreateInfo) dealCreateInfo.classList.remove('hidden');
 }
 
 /**
@@ -1529,16 +1545,28 @@ async function handleSearchDeals() {
             dealSearchStatus.textContent = `✓ Found ${deals.length} deal(s)`;
             dealSearchStatus.style.color = '#10b981';
 
-            // Populate search results dropdown
-            dealSearchDropdown.innerHTML = '<option value="">Select a deal...</option>';
+            // Populate search results with checkboxes
+            dealCheckboxesContainer.innerHTML = '';
             deals.forEach(deal => {
-                const option = document.createElement('option');
-                option.value = deal.id;
-                option.dealData = deal; // Attach full deal data
+                const dealItem = document.createElement('div');
+                dealItem.className = 'deal-checkbox-item';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `deal-${deal.id}`;
+                checkbox.value = deal.id;
+                checkbox.dataset.dealData = JSON.stringify(deal);
+                checkbox.addEventListener('change', handleDealCheckboxChange);
+
+                const label = document.createElement('label');
+                label.htmlFor = `deal-${deal.id}`;
                 const amount = deal.amount ? `$${parseFloat(deal.amount).toLocaleString()}` : '$0';
                 const stageDisplay = getDealStageDisplayName(deal.stage) || 'Unknown';
-                option.textContent = `${deal.name || 'Unnamed Deal'} - ${amount} - ${stageDisplay}`;
-                dealSearchDropdown.appendChild(option);
+                label.textContent = `${deal.name || 'Unnamed Deal'} - ${amount} - ${stageDisplay}`;
+
+                dealItem.appendChild(checkbox);
+                dealItem.appendChild(label);
+                dealCheckboxesContainer.appendChild(dealItem);
             });
 
             dealSearchResults.classList.remove('hidden');
@@ -1553,30 +1581,133 @@ async function handleSearchDeals() {
 }
 
 /**
- * Handle deal search dropdown selection
+ * Handle deal checkbox change (multi-select)
  */
-function handleDealSearchSelection(e) {
-    selectedDealId = e.target.value;
+function handleDealCheckboxChange(e) {
+    const checkbox = e.target;
+    const dealId = checkbox.value;
+    const dealData = JSON.parse(checkbox.dataset.dealData);
 
-    if (selectedDealId) {
-        const selectedOption = dealSearchDropdown.options[dealSearchDropdown.selectedIndex];
-        const dealData = selectedOption.dealData;
-
-        // Store and populate deal data
-        if (dealData) {
-            selectedDealData = dealData;
-            populateDealFields(dealData);
-            dealDetails.classList.remove('hidden');
-        }
-
-        console.log('Deal selected from search:', selectedDealId);
-        updateExecutionSummary();
+    if (checkbox.checked) {
+        // Add deal to selected deals
+        const dealObj = {
+            id: dealId,
+            name: dealData.name,
+            stage: dealData.stage,
+            amount: dealData.amount,
+            next_step: dealData.next_step || '',
+            next_step_date: dealData.next_step_date || '',
+            updates: {
+                dealstage: '',
+                hs_next_step: '',
+                next_steps_date: ''
+            }
+        };
+        selectedDeals.push(dealObj);
+        console.log('Deal added:', dealId);
     } else {
-        // Clear deal details when deselected
-        selectedDealData = null;
-        dealDetails.classList.add('hidden');
-        updateExecutionSummary();
+        // Remove deal from selected deals
+        selectedDeals = selectedDeals.filter(d => d.id !== dealId);
+        console.log('Deal removed:', dealId);
     }
+
+    renderSelectedDeals();
+    updateExecutionSummary();
+}
+
+/**
+ * Render the list of selected deals with update fields
+ */
+function renderSelectedDeals() {
+    selectedDealsCount.textContent = selectedDeals.length;
+
+    if (selectedDeals.length === 0) {
+        selectedDealsList.classList.add('hidden');
+        return;
+    }
+
+    selectedDealsList.classList.remove('hidden');
+    selectedDealsContainer.innerHTML = '';
+
+    selectedDeals.forEach((deal, index) => {
+        const dealCard = document.createElement('div');
+        dealCard.className = 'selected-deal-card';
+        dealCard.innerHTML = `
+            <div class="deal-card-header">
+                <h5>${deal.name}</h5>
+                <button class="btn-remove-deal" data-deal-id="${deal.id}" title="Remove deal">✕</button>
+            </div>
+            <div class="deal-card-info">
+                <span class="deal-info-label">Stage:</span>
+                <span>${getDealStageDisplayName(deal.stage) || 'Unknown'}</span>
+            </div>
+            <div class="deal-card-info">
+                <span class="deal-info-label">Amount:</span>
+                <span>$${deal.amount ? parseFloat(deal.amount).toLocaleString() : '0'}</span>
+            </div>
+            <div class="deal-update-fields">
+                <div class="form-group">
+                    <label>Update Next Step:</label>
+                    <input type="text" class="deal-field-input"
+                           data-deal-index="${index}"
+                           data-field="hs_next_step"
+                           placeholder="${deal.next_step || 'Enter next step...'}"
+                           value="">
+                </div>
+                <div class="form-group">
+                    <label>Update Next Step Date:</label>
+                    <input type="date" class="deal-field-input"
+                           data-deal-index="${index}"
+                           data-field="next_steps_date"
+                           value="">
+                </div>
+            </div>
+        `;
+
+        // Add remove button listener
+        const removeBtn = dealCard.querySelector('.btn-remove-deal');
+        removeBtn.addEventListener('click', () => handleRemoveDeal(deal.id));
+
+        // Add input field listeners
+        const inputs = dealCard.querySelectorAll('.deal-field-input');
+        inputs.forEach(input => {
+            input.addEventListener('change', handleDealFieldUpdate);
+        });
+
+        selectedDealsContainer.appendChild(dealCard);
+    });
+}
+
+/**
+ * Handle updating a deal field
+ */
+function handleDealFieldUpdate(e) {
+    const input = e.target;
+    const dealIndex = parseInt(input.dataset.dealIndex);
+    const field = input.dataset.field;
+    const value = input.value;
+
+    if (selectedDeals[dealIndex]) {
+        selectedDeals[dealIndex].updates[field] = value;
+        console.log(`Updated deal ${selectedDeals[dealIndex].id} field ${field}:`, value);
+    }
+}
+
+/**
+ * Handle removing a deal from selection
+ */
+function handleRemoveDeal(dealId) {
+    // Uncheck the checkbox
+    const checkbox = document.getElementById(`deal-${dealId}`);
+    if (checkbox) {
+        checkbox.checked = false;
+    }
+
+    // Remove from selected deals
+    selectedDeals = selectedDeals.filter(d => d.id !== dealId);
+
+    renderSelectedDeals();
+    updateExecutionSummary();
 }
 
 /**
@@ -1647,10 +1778,10 @@ async function handleCreateDeal() {
         };
 
         // Switch to update mode
-        dealNameInput.disabled = true;
-        createDealBtn.classList.add('hidden');
-        dealUpdateInfo.classList.remove('hidden');
-        dealCreateInfo.classList.add('hidden');
+        if (dealNameInput) dealNameInput.disabled = true;
+        if (createDealBtn) createDealBtn.classList.add('hidden');
+        if (dealUpdateInfo) dealUpdateInfo.classList.remove('hidden');
+        if (dealCreateInfo) dealCreateInfo.classList.add('hidden');
 
         console.log('Deal created successfully:', selectedDealId);
         updateExecutionSummary();
@@ -1947,17 +2078,9 @@ async function handleConfirmAndExecute() {
     }
 
     // VALIDATION 2: Check HubSpot contact or deal selection
-    if (hubspotAction !== 'skip' && !selectedContactId && !selectedDealId) {
-        showPreviewError('⚠️ Please select a HubSpot contact or deal, or choose "Skip HubSpot" option.');
+    if (hubspotAction !== 'skip' && !selectedContactId && selectedDeals.length === 0) {
+        showPreviewError('⚠️ Please select a HubSpot contact or deal(s), or choose "Skip HubSpot" option.');
         return;
-    }
-
-    // VALIDATION 3: Check deal selection if "log_with_deal" is chosen
-    if (hubspotAction === 'log_with_deal') {
-        if (!selectedDealId) {
-            showPreviewError('⚠️ Please select a deal from the dropdown, or choose "Log call note only" instead.');
-            return;
-        }
     }
 
     // VALIDATION 4: Check processed data
@@ -1990,13 +2113,15 @@ async function handleConfirmAndExecute() {
         showExecutionLoading();
 
         // Build new structured payload
-        // Build deal updates object if we have a deal selected
-        const dealUpdates = {};
-        if (selectedDealId) {
-            if (dealStageInput.value) dealUpdates.dealstage = dealStageInput.value;
-            if (dealNextStepInput.value) dealUpdates.hs_next_step = dealNextStepInput.value;
-            if (dealNextStepDateInput.value) dealUpdates.next_steps_date = dealNextStepDateInput.value;
-        }
+        // Prepare deals data with their individual updates
+        const dealsData = selectedDeals.map(deal => ({
+            deal_id: deal.id,
+            deal_name: deal.name,
+            updates: {
+                ...(deal.updates.hs_next_step && { hs_next_step: deal.updates.hs_next_step }),
+                ...(deal.updates.next_steps_date && { next_steps_date: deal.updates.next_steps_date })
+            }
+        }));
 
         // Build future task data if checkbox is checked
         const shouldCreateFutureTask = createFutureTaskCheckbox && createFutureTaskCheckbox.checked;
@@ -2019,8 +2144,7 @@ async function handleConfirmAndExecute() {
                 action: hubspotAction,
                 contact_id: selectedContactId || null,
                 contact_name: selectedContactName || '',
-                deal_id: selectedDealId || null,
-                deal_updates: dealUpdates,
+                deals: dealsData, // Array of deals with their individual updates
                 summary: processedData.summary || [],
                 raw_notes: processedData.raw_notes || '',
                 future_task: futureTask
@@ -2104,7 +2228,27 @@ function displaySuccess(data) {
         // HubSpot results
         if (hubspot.action_taken === 'skipped') {
             html += '<p style="color: #64748b;">⊘ HubSpot note skipped</p>';
+        } else if (hubspot.deals && hubspot.deals.length > 0) {
+            // Multi-deal result
+            const successfulDeals = hubspot.deals.filter(d => d.note_created);
+            const failedDeals = hubspot.deals.filter(d => !d.note_created);
+
+            if (successfulDeals.length > 0) {
+                html += `<p style="color: #10b981;">✓ Notes logged to ${successfulDeals.length} deal(s):</p>`;
+                successfulDeals.forEach(deal => {
+                    const updateInfo = deal.updated ? ' (updated)' : '';
+                    html += `<p style="color: #10b981; font-size: 0.9rem; margin-left: 20px;">• ${escapeHtml(deal.deal_name)}${updateInfo}</p>`;
+                });
+            }
+
+            if (failedDeals.length > 0) {
+                html += `<p style="color: #dc2626;">✗ Failed to log notes to ${failedDeals.length} deal(s):</p>`;
+                failedDeals.forEach(deal => {
+                    html += `<p style="color: #dc2626; font-size: 0.9rem; margin-left: 20px;">• ${escapeHtml(deal.deal_name)}: ${escapeHtml(deal.error || 'Unknown error')}</p>`;
+                });
+            }
         } else if (hubspot.note_id) {
+            // Single contact note (old format)
             if (hubspot.action_taken === 'log_with_deal' && hubspot.deal_id) {
                 html += `<p style="color: #10b981;">✓ HubSpot note created for <strong>${escapeHtml(hubspot.contact_name || 'contact')}</strong> and associated with deal</p>`;
             } else {
@@ -2199,7 +2343,7 @@ function handleNewNotes() {
     processedData = null;
     selectedContactId = null;
     selectedContactName = null;
-    selectedDealId = null;
+    selectedDeals = [];
     selectedInvestorId = null;
     selectedInvestorName = null;
     investorPageId = null;

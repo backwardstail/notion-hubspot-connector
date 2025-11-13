@@ -1,6 +1,9 @@
 """
-Deal Reminder Module
-Sends daily email reminders for deals with next steps due today
+Daily Reminder Module
+Sends daily email reminders for:
+- Deals with next steps due tomorrow
+- HubSpot tasks due tomorrow
+- Notion to-dos due tomorrow
 """
 
 import os
@@ -15,6 +18,7 @@ from typing import List, Dict
 logger = logging.getLogger(__name__)
 
 HUBSPOT_API_BASE = "https://api.hubapi.com"
+NOTION_API_BASE = "https://api.notion.com/v1"
 
 
 def get_all_deals_with_next_steps(api_key: str) -> List[Dict]:
@@ -157,6 +161,54 @@ def filter_deals_due_today(deals: List[Dict]) -> List[Dict]:
     """
     today = datetime.now(timezone.utc)
     return filter_deals_due_on_date(deals, today)
+
+
+def filter_overdue_deals(deals: List[Dict]) -> List[Dict]:
+    """
+    Filter deals to only those with next_step_date in the past (overdue)
+
+    Args:
+        deals (List[Dict]): List of deal objects from HubSpot
+
+    Returns:
+        List[Dict]: Filtered list of overdue deals
+    """
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_str = today.strftime('%Y-%m-%d')
+
+    overdue_deals = []
+
+    for deal in deals:
+        properties = deal.get('properties', {})
+        deal_name = properties.get('dealname', 'Unnamed')
+        next_step_date_str = properties.get('next_steps_date', '')
+
+        if not next_step_date_str:
+            continue
+
+        try:
+            # Try parsing as timestamp first
+            try:
+                next_step_timestamp_ms = int(next_step_date_str)
+                next_step_datetime = datetime.fromtimestamp(next_step_timestamp_ms / 1000, tz=timezone.utc)
+                deal_date_str = next_step_datetime.strftime('%Y-%m-%d')
+            except (ValueError, TypeError):
+                # Parse as YYYY-MM-DD string
+                from datetime import datetime as dt
+                next_step_datetime = dt.strptime(next_step_date_str, '%Y-%m-%d')
+                deal_date_str = next_step_date_str
+
+            # Check if date is before today
+            if deal_date_str < today_str:
+                overdue_deals.append(deal)
+                logger.info(f"Deal '{deal_name}' is overdue (due: {deal_date_str})")
+
+        except Exception as e:
+            logger.warning(f"Invalid date format for deal {deal.get('id')}: {str(e)}")
+            continue
+
+    logger.info(f"Found {len(overdue_deals)} overdue deal(s)")
+    return overdue_deals
 
 
 def get_deal_contacts(deal_id: str, api_key: str) -> List[Dict]:
@@ -319,7 +371,381 @@ def format_deal_for_email(deal: Dict, contacts: List[Dict], stage_label: str, po
     }
 
 
-def build_email_html(deals_data: List[Dict]) -> str:
+def get_hubspot_tasks_due_on_date(api_key: str, target_date: datetime, portal_id: str = None) -> List[Dict]:
+    """
+    Fetch HubSpot tasks due on a specific date
+
+    Args:
+        api_key (str): HubSpot API key
+        target_date (datetime): Target date to check
+        portal_id (str): HubSpot portal ID for constructing URLs
+
+    Returns:
+        List[Dict]: List of tasks due on target date
+    """
+    try:
+        url = f"{HUBSPOT_API_BASE}/crm/v3/objects/tasks/search"
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+
+        # Convert target date to timestamp
+        target_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        target_start_ms = int(target_start.timestamp() * 1000)
+        target_end_ms = int((target_start.timestamp() + 86400) * 1000)
+
+        # Search for tasks due on target date
+        payload = {
+            "filterGroups": [{
+                "filters": [
+                    {
+                        "propertyName": "hs_timestamp",
+                        "operator": "GTE",
+                        "value": str(target_start_ms)
+                    },
+                    {
+                        "propertyName": "hs_timestamp",
+                        "operator": "LT",
+                        "value": str(target_end_ms)
+                    },
+                    {
+                        "propertyName": "hs_task_status",
+                        "operator": "NEQ",
+                        "value": "COMPLETED"
+                    }
+                ]
+            }],
+            "properties": [
+                "hs_task_subject",
+                "hs_task_body",
+                "hs_task_status",
+                "hs_task_priority",
+                "hs_timestamp",
+                "hubspot_owner_id"
+            ],
+            "limit": 100
+        }
+
+        logger.info(f"Fetching HubSpot tasks due on {target_date.strftime('%Y-%m-%d')}")
+        response = requests.post(url, json=payload, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+            tasks = data.get('results', [])
+
+            # Format tasks for email
+            formatted_tasks = []
+            for task in tasks:
+                props = task.get('properties', {})
+                task_id = task.get('id')
+
+                # Format due date
+                due_timestamp = props.get('hs_timestamp', '')
+                due_date_formatted = ''
+                if due_timestamp:
+                    try:
+                        date_obj = datetime.fromtimestamp(int(due_timestamp) / 1000, tz=timezone.utc)
+                        due_date_formatted = date_obj.strftime('%Y-%m-%d %H:%M')
+                    except (ValueError, TypeError):
+                        due_date_formatted = due_timestamp
+
+                # Construct task URL
+                task_url = None
+                if portal_id and task_id:
+                    task_url = f"https://app.hubspot.com/contacts/{portal_id}/task/{task_id}"
+
+                formatted_tasks.append({
+                    'id': task_id,
+                    'subject': props.get('hs_task_subject', 'Untitled Task'),
+                    'body': props.get('hs_task_body', ''),
+                    'status': props.get('hs_task_status', 'NOT_STARTED'),
+                    'priority': props.get('hs_task_priority', 'NONE'),
+                    'due_date': due_date_formatted,
+                    'url': task_url
+                })
+
+            logger.info(f"Found {len(formatted_tasks)} HubSpot task(s) due on {target_date.strftime('%Y-%m-%d')}")
+            return formatted_tasks
+        else:
+            logger.error(f"HubSpot tasks API error: {response.status_code} - {response.text}")
+            return []
+
+    except Exception as e:
+        logger.error(f"Error fetching HubSpot tasks: {str(e)}", exc_info=True)
+        return []
+
+
+def get_overdue_hubspot_tasks(api_key: str, portal_id: str = None) -> List[Dict]:
+    """
+    Fetch HubSpot tasks that are overdue (past due date)
+
+    Args:
+        api_key (str): HubSpot API key
+        portal_id (str): HubSpot portal ID for constructing URLs
+
+    Returns:
+        List[Dict]: List of overdue tasks
+    """
+    try:
+        url = f"{HUBSPOT_API_BASE}/crm/v3/objects/tasks/search"
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+
+        # Get current timestamp
+        now = datetime.now(timezone.utc)
+        now_ms = int(now.timestamp() * 1000)
+
+        # Search for tasks with due date before now and not completed
+        payload = {
+            "filterGroups": [{
+                "filters": [
+                    {
+                        "propertyName": "hs_timestamp",
+                        "operator": "LT",
+                        "value": str(now_ms)
+                    },
+                    {
+                        "propertyName": "hs_task_status",
+                        "operator": "NEQ",
+                        "value": "COMPLETED"
+                    }
+                ]
+            }],
+            "properties": [
+                "hs_task_subject",
+                "hs_task_body",
+                "hs_task_status",
+                "hs_task_priority",
+                "hs_timestamp",
+                "hubspot_owner_id"
+            ],
+            "limit": 100
+        }
+
+        logger.info("Fetching overdue HubSpot tasks")
+        response = requests.post(url, json=payload, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+            tasks = data.get('results', [])
+
+            # Format tasks for email
+            formatted_tasks = []
+            for task in tasks:
+                props = task.get('properties', {})
+                task_id = task.get('id')
+
+                # Format due date
+                due_timestamp = props.get('hs_timestamp', '')
+                due_date_formatted = ''
+                if due_timestamp:
+                    try:
+                        date_obj = datetime.fromtimestamp(int(due_timestamp) / 1000, tz=timezone.utc)
+                        due_date_formatted = date_obj.strftime('%Y-%m-%d %H:%M')
+                    except (ValueError, TypeError):
+                        due_date_formatted = due_timestamp
+
+                # Construct task URL
+                task_url = None
+                if portal_id and task_id:
+                    task_url = f"https://app.hubspot.com/contacts/{portal_id}/task/{task_id}"
+
+                formatted_tasks.append({
+                    'id': task_id,
+                    'subject': props.get('hs_task_subject', 'Untitled Task'),
+                    'body': props.get('hs_task_body', ''),
+                    'status': props.get('hs_task_status', 'NOT_STARTED'),
+                    'priority': props.get('hs_task_priority', 'NONE'),
+                    'due_date': due_date_formatted,
+                    'url': task_url,
+                    'overdue': True
+                })
+
+            logger.info(f"Found {len(formatted_tasks)} overdue HubSpot task(s)")
+            return formatted_tasks
+        else:
+            logger.error(f"HubSpot tasks API error: {response.status_code} - {response.text}")
+            return []
+
+    except Exception as e:
+        logger.error(f"Error fetching overdue HubSpot tasks: {str(e)}", exc_info=True)
+        return []
+
+
+def get_notion_todos_due_on_date(notion_api_key: str, notion_db_id: str, target_date: datetime) -> List[Dict]:
+    """
+    Fetch Notion to-dos due on a specific date
+
+    Args:
+        notion_api_key (str): Notion API key
+        notion_db_id (str): Notion database ID
+        target_date (datetime): Target date to check
+
+    Returns:
+        List[Dict]: List of to-dos due on target date
+    """
+    try:
+        url = f"{NOTION_API_BASE}/databases/{notion_db_id}/query"
+        headers = {
+            'Authorization': f'Bearer {notion_api_key}',
+            'Content-Type': 'application/json',
+            'Notion-Version': '2022-06-28'
+        }
+
+        # Format target date for Notion (YYYY-MM-DD)
+        target_date_str = target_date.strftime('%Y-%m-%d')
+
+        # Query for todos due on target date
+        payload = {
+            "filter": {
+                "property": "Manual Due",
+                "date": {
+                    "equals": target_date_str
+                }
+            }
+        }
+
+        logger.info(f"Fetching Notion to-dos due on {target_date_str}")
+        response = requests.post(url, json=payload, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get('results', [])
+
+            # Format to-dos for email
+            formatted_todos = []
+            for todo in results:
+                props = todo.get('properties', {})
+                todo_id = todo.get('id')
+                todo_url = todo.get('url', '')
+
+                # Extract title
+                task_name_prop = props.get('Task Name', {})
+                title_array = task_name_prop.get('title', [])
+                task_name = title_array[0].get('plain_text', 'Untitled') if title_array else 'Untitled'
+
+                # Extract next step if available
+                next_step_prop = props.get('Next Step', {})
+                next_step_array = next_step_prop.get('rich_text', [])
+                next_step = next_step_array[0].get('plain_text', '') if next_step_array else ''
+
+                # Extract due date
+                due_date_prop = props.get('Manual Due', {})
+                due_date_obj = due_date_prop.get('date', {})
+                due_date = due_date_obj.get('start', '') if due_date_obj else ''
+
+                formatted_todos.append({
+                    'id': todo_id,
+                    'task_name': task_name,
+                    'next_step': next_step,
+                    'due_date': due_date,
+                    'url': todo_url
+                })
+
+            logger.info(f"Found {len(formatted_todos)} Notion to-do(s) due on {target_date_str}")
+            return formatted_todos
+        else:
+            logger.error(f"Notion API error: {response.status_code} - {response.text}")
+            return []
+
+    except Exception as e:
+        logger.error(f"Error fetching Notion to-dos: {str(e)}", exc_info=True)
+        return []
+
+
+def get_overdue_notion_todos(notion_api_key: str, notion_db_id: str) -> List[Dict]:
+    """
+    Fetch Notion to-dos that are overdue (past due date)
+
+    Args:
+        notion_api_key (str): Notion API key
+        notion_db_id (str): Notion database ID
+
+    Returns:
+        List[Dict]: List of overdue to-dos
+    """
+    try:
+        url = f"{NOTION_API_BASE}/databases/{notion_db_id}/query"
+        headers = {
+            'Authorization': f'Bearer {notion_api_key}',
+            'Content-Type': 'application/json',
+            'Notion-Version': '2022-06-28'
+        }
+
+        # Format today's date for Notion
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_str = today.strftime('%Y-%m-%d')
+
+        # Query for todos with due date before today
+        payload = {
+            "filter": {
+                "property": "Manual Due",
+                "date": {
+                    "before": today_str
+                }
+            }
+        }
+
+        logger.info("Fetching overdue Notion to-dos")
+        response = requests.post(url, json=payload, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get('results', [])
+
+            # Format to-dos for email
+            formatted_todos = []
+            for todo in results:
+                props = todo.get('properties', {})
+                todo_id = todo.get('id')
+                todo_url = todo.get('url', '')
+
+                # Extract title
+                task_name_prop = props.get('Task Name', {})
+                title_array = task_name_prop.get('title', [])
+                task_name = title_array[0].get('plain_text', 'Untitled') if title_array else 'Untitled'
+
+                # Extract next step if available
+                next_step_prop = props.get('Next Step', {})
+                next_step_array = next_step_prop.get('rich_text', [])
+                next_step = next_step_array[0].get('plain_text', '') if next_step_array else ''
+
+                # Extract due date
+                due_date_prop = props.get('Manual Due', {})
+                due_date_obj = due_date_prop.get('date', {})
+                due_date = due_date_obj.get('start', '') if due_date_obj else ''
+
+                formatted_todos.append({
+                    'id': todo_id,
+                    'task_name': task_name,
+                    'next_step': next_step,
+                    'due_date': due_date,
+                    'url': todo_url,
+                    'overdue': True
+                })
+
+            logger.info(f"Found {len(formatted_todos)} overdue Notion to-do(s)")
+            return formatted_todos
+        else:
+            logger.error(f"Notion API error: {response.status_code} - {response.text}")
+            return []
+
+    except Exception as e:
+        logger.error(f"Error fetching overdue Notion to-dos: {str(e)}", exc_info=True)
+        return []
+
+
+def build_email_html(
+    deals_data: List[Dict] = None,
+    tasks_data: List[Dict] = None,
+    todos_data: List[Dict] = None,
+    overdue_deals: List[Dict] = None,
+    overdue_tasks: List[Dict] = None,
+    overdue_todos: List[Dict] = None
+) -> str:
     """
     Build HTML email body from formatted deals data
 
@@ -346,6 +772,14 @@ def build_email_html(deals_data: List[Dict]) -> str:
                 padding: 20px;
                 text-align: center;
             }}
+            .overdue-header {{
+                background-color: #dc2626;
+                color: white;
+                padding: 20px;
+                text-align: center;
+                margin-bottom: 20px;
+                border-radius: 5px;
+            }}
             .deal {{
                 border: 1px solid #ddd;
                 border-radius: 5px;
@@ -353,11 +787,26 @@ def build_email_html(deals_data: List[Dict]) -> str:
                 margin: 15px 0;
                 background-color: #f9f9f9;
             }}
+            .deal.overdue {{
+                border: 2px solid #dc2626;
+                background-color: #fee2e2;
+            }}
             .deal-name {{
                 font-size: 18px;
                 font-weight: bold;
                 color: #0078d4;
                 margin-bottom: 10px;
+            }}
+            .deal-name.overdue {{
+                color: #dc2626;
+            }}
+            .overdue-badge {{
+                background: #dc2626;
+                color: white;
+                padding: 3px 10px;
+                border-radius: 4px;
+                font-size: 0.85em;
+                margin-left: 8px;
             }}
             .deal-field {{
                 margin: 5px 0;
@@ -393,12 +842,181 @@ def build_email_html(deals_data: List[Dict]) -> str:
     </head>
     <body>
         <div class="header">
-            <h1>📅 Daily Deal Reminders</h1>
+            <h1>📅 Daily Reminders</h1>
             <p>{today}</p>
         </div>
         <div style="padding: 20px;">
-            <p>You have <strong>{len(deals_data)} deal(s)</strong> with next steps due today:</p>
     """
+
+    # Initialize lists as empty if None
+    if deals_data is None:
+        deals_data = []
+    if tasks_data is None:
+        tasks_data = []
+    if todos_data is None:
+        todos_data = []
+    if overdue_deals is None:
+        overdue_deals = []
+    if overdue_tasks is None:
+        overdue_tasks = []
+    if overdue_todos is None:
+        overdue_todos = []
+
+    # Calculate totals
+    total_overdue = len(overdue_deals) + len(overdue_tasks) + len(overdue_todos)
+    total_tomorrow = len(deals_data) + len(tasks_data) + len(todos_data)
+
+    # Add overdue section at the top if there are overdue items
+    if total_overdue > 0:
+        html += f"""
+            <div class="overdue-header">
+                <h2>⚠️ OVERDUE ITEMS ({total_overdue})</h2>
+                <p style="margin: 5px 0;">These items need your immediate attention!</p>
+            </div>
+        """
+
+        # Add overdue deals
+        if len(overdue_deals) > 0:
+            html += f"""
+                <h3 style="color: #dc2626;">💼 Overdue Deals ({len(overdue_deals)})</h3>
+            """
+            for deal_data in overdue_deals:
+                deal_url = deal_data.get('url')
+                deal_name = deal_data.get('name', 'Unnamed Deal')
+
+                if deal_url:
+                    deal_name_html = f'<a href="{deal_url}">{deal_name}</a>'
+                else:
+                    deal_name_html = deal_name
+
+                html += f"""
+                    <div class="deal overdue">
+                        <div class="deal-name overdue">{deal_name_html}<span class="overdue-badge">OVERDUE</span></div>
+                        <div class="deal-field">
+                            <span class="field-label">Stage:</span>
+                            <span>{deal_data.get('stage', 'Unknown')}</span>
+                        </div>
+                        <div class="deal-field">
+                            <span class="field-label">Next Step:</span>
+                            <span>{deal_data.get('next_step', 'N/A')}</span>
+                        </div>
+                        <div class="deal-field">
+                            <span class="field-label">Was Due:</span>
+                            <span style="color: #dc2626; font-weight: bold;">{deal_data.get('next_step_date', 'N/A')}</span>
+                        </div>
+                        <div class="deal-field">
+                            <span class="field-label">Amount:</span>
+                            <span>${deal_data.get('amount', 'N/A')}</span>
+                        </div>
+                """
+
+                contacts = deal_data.get('contacts', [])
+                if contacts:
+                    html += """
+                        <div class="deal-field">
+                            <span class="field-label">Contacts:</span>
+                        </div>
+                        <div class="contacts-list">
+                    """
+                    for contact in contacts:
+                        html += f'<div class="contact-item">• {contact}</div>'
+                    html += """
+                        </div>
+                    """
+
+                html += """
+                    </div>
+                """
+
+        # Add overdue tasks
+        if len(overdue_tasks) > 0:
+            html += f"""
+                <h3 style="color: #dc2626;">✅ Overdue HubSpot Tasks ({len(overdue_tasks)})</h3>
+            """
+            for task in overdue_tasks:
+                task_url = task.get('url')
+                task_subject = task.get('subject', 'Untitled Task')
+
+                if task_url:
+                    task_subject_html = f'<a href="{task_url}">{task_subject}</a>'
+                else:
+                    task_subject_html = task_subject
+
+                html += f"""
+                    <div class="deal overdue">
+                        <div class="deal-name overdue">{task_subject_html}<span class="overdue-badge">OVERDUE</span></div>
+                """
+
+                if task.get('body'):
+                    html += f"""
+                        <div class="deal-field">
+                            <span class="field-label">Description:</span>
+                            <span>{task.get('body')}</span>
+                        </div>
+                    """
+
+                html += f"""
+                        <div class="deal-field">
+                            <span class="field-label">Was Due:</span>
+                            <span style="color: #dc2626; font-weight: bold;">{task.get('due_date', 'N/A')}</span>
+                        </div>
+                        <div class="deal-field">
+                            <span class="field-label">Status:</span>
+                            <span>{task.get('status', 'NOT_STARTED')}</span>
+                        </div>
+                    </div>
+                """
+
+        # Add overdue todos
+        if len(overdue_todos) > 0:
+            html += f"""
+                <h3 style="color: #dc2626;">📝 Overdue Notion To-Dos ({len(overdue_todos)})</h3>
+            """
+            for todo in overdue_todos:
+                todo_url = todo.get('url')
+                task_name = todo.get('task_name', 'Untitled')
+
+                if todo_url:
+                    task_name_html = f'<a href="{todo_url}">{task_name}</a>'
+                else:
+                    task_name_html = task_name
+
+                html += f"""
+                    <div class="deal overdue">
+                        <div class="deal-name overdue">{task_name_html}<span class="overdue-badge">OVERDUE</span></div>
+                """
+
+                if todo.get('next_step'):
+                    html += f"""
+                        <div class="deal-field">
+                            <span class="field-label">Next Step:</span>
+                            <span>{todo.get('next_step')}</span>
+                        </div>
+                    """
+
+                html += f"""
+                        <div class="deal-field">
+                            <span class="field-label">Was Due:</span>
+                            <span style="color: #dc2626; font-weight: bold;">{todo.get('due_date', 'N/A')}</span>
+                        </div>
+                    </div>
+                """
+
+        html += """
+            <hr style="margin: 40px 0; border: none; border-top: 3px solid #dc2626;">
+        """
+
+    # Now add the "Due Tomorrow" section
+    if total_tomorrow > 0:
+        html += f"""
+            <h2 style="color: #0078d4; margin-bottom: 15px;">📅 Due Tomorrow ({total_tomorrow})</h2>
+        """
+
+    # Add deals due tomorrow
+    if len(deals_data) > 0:
+        html += f"""
+            <h3>💼 Deals ({len(deals_data)})</h3>
+        """
 
     for deal_data in deals_data:
         deal_url = deal_data.get('url')
@@ -448,10 +1066,92 @@ def build_email_html(deals_data: List[Dict]) -> str:
             </div>
         """
 
+    # Add HubSpot Tasks section
+    if tasks_data and len(tasks_data) > 0:
+        html += f"""
+            <hr style="margin: 30px 0; border: none; border-top: 2px solid #e5e7eb;">
+            <h2 style="color: #0078d4; margin-bottom: 15px;">✅ HubSpot Tasks ({len(tasks_data)})</h2>
+        """
+
+        for task in tasks_data:
+            task_url = task.get('url')
+            task_subject = task.get('subject', 'Untitled Task')
+
+            if task_url:
+                task_subject_html = f'<a href="{task_url}">{task_subject}</a>'
+            else:
+                task_subject_html = task_subject
+
+            priority_badge = ''
+            if task.get('priority') == 'HIGH':
+                priority_badge = ' <span style="background: #dc2626; color: white; padding: 2px 8px; border-radius: 3px; font-size: 0.85em;">HIGH</span>'
+
+            html += f"""
+                <div class="deal">
+                    <div class="deal-name">{task_subject_html}{priority_badge}</div>
+            """
+
+            if task.get('body'):
+                html += f"""
+                    <div class="deal-field">
+                        <span class="field-label">Description:</span>
+                        <span>{task.get('body')}</span>
+                    </div>
+                """
+
+            html += f"""
+                    <div class="deal-field">
+                        <span class="field-label">Due:</span>
+                        <span>{task.get('due_date', 'N/A')}</span>
+                    </div>
+                    <div class="deal-field">
+                        <span class="field-label">Status:</span>
+                        <span>{task.get('status', 'NOT_STARTED')}</span>
+                    </div>
+                </div>
+            """
+
+    # Add Notion To-Dos section
+    if todos_data and len(todos_data) > 0:
+        html += f"""
+            <hr style="margin: 30px 0; border: none; border-top: 2px solid #e5e7eb;">
+            <h2 style="color: #0078d4; margin-bottom: 15px;">📝 Notion To-Dos ({len(todos_data)})</h2>
+        """
+
+        for todo in todos_data:
+            todo_url = todo.get('url')
+            task_name = todo.get('task_name', 'Untitled')
+
+            if todo_url:
+                task_name_html = f'<a href="{todo_url}">{task_name}</a>'
+            else:
+                task_name_html = task_name
+
+            html += f"""
+                <div class="deal">
+                    <div class="deal-name">{task_name_html}</div>
+            """
+
+            if todo.get('next_step'):
+                html += f"""
+                    <div class="deal-field">
+                        <span class="field-label">Next Step:</span>
+                        <span>{todo.get('next_step')}</span>
+                    </div>
+                """
+
+            html += f"""
+                    <div class="deal-field">
+                        <span class="field-label">Due Date:</span>
+                        <span>{todo.get('due_date', 'N/A')}</span>
+                    </div>
+                </div>
+            """
+
     html += """
         </div>
         <div class="footer">
-            <p>This is an automated reminder from your HubSpot Deal Tracker</p>
+            <p>This is an automated daily digest from your CRM</p>
         </div>
     </body>
     </html>
@@ -518,7 +1218,9 @@ def send_daily_deal_reminders(
     smtp_port: int,
     smtp_username: str,
     smtp_password: str,
-    from_email: str
+    from_email: str,
+    notion_api_key: str = None,
+    notion_todos_db_id: str = None
 ) -> Dict:
     """
     Main function to check deals and send daily reminder email
@@ -539,35 +1241,50 @@ def send_daily_deal_reminders(
         Dict: Result with success status and details
     """
     try:
-        logger.info("=== Starting daily deal reminder check ===")
+        logger.info("=== Starting daily reminder check ===")
+        from datetime import timedelta
+        tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
 
         # Step 1: Fetch all deals with next steps
         all_deals = get_all_deals_with_next_steps(hubspot_api_key)
+        deals_due_tomorrow = filter_deals_due_on_date(all_deals, tomorrow) if all_deals else []
 
-        if not all_deals:
-            logger.info("No deals with next steps found")
+        # Step 2: Fetch HubSpot tasks due tomorrow
+        tasks_due_tomorrow = get_hubspot_tasks_due_on_date(hubspot_api_key, tomorrow, hubspot_portal_id)
+
+        # Step 3: Fetch Notion to-dos due tomorrow (if configured)
+        todos_due_tomorrow = []
+        if notion_api_key and notion_todos_db_id:
+            todos_due_tomorrow = get_notion_todos_due_on_date(notion_api_key, notion_todos_db_id, tomorrow)
+
+        # Step 4: Fetch all overdue items
+        logger.info("Fetching overdue items...")
+        overdue_deals_list = filter_overdue_deals(all_deals) if all_deals else []
+        overdue_tasks_list = get_overdue_hubspot_tasks(hubspot_api_key, hubspot_portal_id)
+        overdue_todos_list = []
+        if notion_api_key and notion_todos_db_id:
+            overdue_todos_list = get_overdue_notion_todos(notion_api_key, notion_todos_db_id)
+
+        # Check if we have anything to send (tomorrow + overdue)
+        total_tomorrow = len(deals_due_tomorrow) + len(tasks_due_tomorrow) + len(todos_due_tomorrow)
+        total_overdue = len(overdue_deals_list) + len(overdue_tasks_list) + len(overdue_todos_list)
+        total_items = total_tomorrow + total_overdue
+
+        if total_items == 0:
+            logger.info("No items due tomorrow and no overdue items")
             return {
                 'success': True,
-                'message': 'No deals with next steps found',
+                'message': 'No deals, tasks, or to-dos due tomorrow or overdue',
                 'deals_found': 0,
+                'tasks_found': 0,
+                'todos_found': 0,
+                'overdue_deals_found': 0,
+                'overdue_tasks_found': 0,
+                'overdue_todos_found': 0,
                 'email_sent': False
             }
 
-        # Step 2: Filter deals due TOMORROW (gives you a day to prepare)
-        from datetime import timedelta
-        tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
-        deals_due_tomorrow = filter_deals_due_on_date(all_deals, tomorrow)
-
-        if not deals_due_tomorrow:
-            logger.info("No deals due tomorrow")
-            return {
-                'success': True,
-                'message': 'No deals due tomorrow',
-                'deals_found': 0,
-                'email_sent': False
-            }
-
-        # Step 3: Get contacts and format each deal
+        # Step 5: Get contacts and format each deal due tomorrow
         deals_data = []
         for deal in deals_due_tomorrow:
             deal_id = deal.get('id')
@@ -590,12 +1307,68 @@ def send_daily_deal_reminders(
             )
             deals_data.append(deal_data)
 
-        # Step 4: Build email HTML
-        html_body = build_email_html(deals_data)
+        # Step 6: Format overdue deals
+        overdue_deals_data = []
+        for deal in overdue_deals_list:
+            deal_id = deal.get('id')
+            properties = deal.get('properties', {})
 
-        # Step 5: Send email
+            # Get contacts
+            contacts = get_deal_contacts(deal_id, hubspot_api_key)
+
+            # Get stage label
+            stage_id = properties.get('dealstage', '')
+            pipeline = properties.get('pipeline', 'default')
+            stage_label = get_deal_stage_label(stage_id, pipeline, hubspot_api_key)
+
+            # Format deal data
+            deal_data = format_deal_for_email(
+                deal,
+                contacts,
+                stage_label,
+                hubspot_portal_id
+            )
+            overdue_deals_data.append(deal_data)
+
+        # Step 7: Build email HTML with both tomorrow and overdue items
+        html_body = build_email_html(
+            deals_data,
+            tasks_due_tomorrow,
+            todos_due_tomorrow,
+            overdue_deals_data,
+            overdue_tasks_list,
+            overdue_todos_list
+        )
+
+        # Step 8: Send email
         tomorrow_formatted = tomorrow.strftime('%B %d, %Y')
-        subject = f"📅 Deal Reminders for Tomorrow ({tomorrow_formatted}) - {len(deals_data)} Next Step(s) Due"
+
+        # Build subject line
+        subject_parts = []
+
+        # Add overdue counts if any
+        if total_overdue > 0:
+            overdue_parts = []
+            if len(overdue_deals_data) > 0:
+                overdue_parts.append(f"{len(overdue_deals_data)} Deal(s)")
+            if len(overdue_tasks_list) > 0:
+                overdue_parts.append(f"{len(overdue_tasks_list)} Task(s)")
+            if len(overdue_todos_list) > 0:
+                overdue_parts.append(f"{len(overdue_todos_list)} To-Do(s)")
+            subject_parts.append(f"⚠️ {total_overdue} OVERDUE ({', '.join(overdue_parts)})")
+
+        # Add tomorrow counts if any
+        if total_tomorrow > 0:
+            tomorrow_parts = []
+            if len(deals_data) > 0:
+                tomorrow_parts.append(f"{len(deals_data)} Deal(s)")
+            if len(tasks_due_tomorrow) > 0:
+                tomorrow_parts.append(f"{len(tasks_due_tomorrow)} Task(s)")
+            if len(todos_due_tomorrow) > 0:
+                tomorrow_parts.append(f"{len(todos_due_tomorrow)} To-Do(s)")
+            subject_parts.append(f"{total_tomorrow} Tomorrow ({', '.join(tomorrow_parts)})")
+
+        subject = f"📅 Daily Reminder for {tomorrow_formatted} - {' | '.join(subject_parts)}"
 
         email_sent = send_email_smtp(
             to_email=to_email,
@@ -609,11 +1382,17 @@ def send_daily_deal_reminders(
         )
 
         if email_sent:
-            logger.info(f"Daily reminder sent successfully: {len(deals_data)} deal(s)")
+            logger.info(f"Daily reminder sent: {len(deals_data)} deal(s) tomorrow, {len(tasks_due_tomorrow)} task(s) tomorrow, {len(todos_due_tomorrow)} to-do(s) tomorrow")
+            logger.info(f"  Overdue: {len(overdue_deals_data)} deal(s), {len(overdue_tasks_list)} task(s), {len(overdue_todos_list)} to-do(s)")
             return {
                 'success': True,
-                'message': f'Reminder sent for {len(deals_data)} deal(s)',
+                'message': f'Reminder sent: {total_items} item(s) ({total_tomorrow} tomorrow, {total_overdue} overdue)',
                 'deals_found': len(deals_data),
+                'tasks_found': len(tasks_due_tomorrow),
+                'todos_found': len(todos_due_tomorrow),
+                'overdue_deals_found': len(overdue_deals_data),
+                'overdue_tasks_found': len(overdue_tasks_list),
+                'overdue_todos_found': len(overdue_todos_list),
                 'email_sent': True
             }
         else:
@@ -622,6 +1401,11 @@ def send_daily_deal_reminders(
                 'success': False,
                 'message': 'Failed to send email',
                 'deals_found': len(deals_data),
+                'tasks_found': len(tasks_due_tomorrow),
+                'todos_found': len(todos_due_tomorrow),
+                'overdue_deals_found': len(overdue_deals_data),
+                'overdue_tasks_found': len(overdue_tasks_list),
+                'overdue_todos_found': len(overdue_todos_list),
                 'email_sent': False,
                 'error': 'SMTP send failed'
             }
@@ -632,6 +1416,11 @@ def send_daily_deal_reminders(
             'success': False,
             'message': f'Error: {str(e)}',
             'deals_found': 0,
+            'tasks_found': 0,
+            'todos_found': 0,
+            'overdue_deals_found': 0,
+            'overdue_tasks_found': 0,
+            'overdue_todos_found': 0,
             'email_sent': False,
             'error': str(e)
         }
