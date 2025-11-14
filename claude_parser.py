@@ -118,7 +118,7 @@ def parse_meeting_notes(notes_text, api_key, parse_preferences=True, parse_todos
         prompt_sections.append("""You are a structured CRM assistant. Parse these investor call notes and extract:
 
 1. CONTACT INFORMATION:
-   - Investor/Company name
+   - Investor/Company name (use the FULL company name as mentioned - e.g., "Waypoint Capital Partners" not just "Waypoint", "Sequoia Capital" not just "Sequoia")
    - Contact person name
    - Email (if mentioned)
 

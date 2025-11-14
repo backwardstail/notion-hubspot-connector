@@ -285,6 +285,98 @@ def create_hubspot_contact(email, firstname, lastname, company, api_key):
         }
 
 
+def convert_text_to_html(text):
+    """
+    Convert plain text to HTML with better formatting preservation.
+
+    Detects and converts:
+    - Bullet points (-, *, •) to <ul><li> lists
+    - Numbered lists (1., 2., etc.) to <ol><li> lists
+    - Multiple spaces to &nbsp; for indentation
+    - Line breaks to <br>
+    - Bold text (**text**) to <strong>
+    - Italic text (*text*) to <em>
+
+    Args:
+        text (str): Plain text to convert
+
+    Returns:
+        str: HTML formatted text
+    """
+    import re
+
+    if not text:
+        return ''
+
+    lines = text.split('\n')
+    html_lines = []
+    in_bullet_list = False
+    in_numbered_list = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Detect bullet points
+        if re.match(r'^[-*•]\s+', stripped):
+            if not in_bullet_list:
+                html_lines.append('<ul>')
+                in_bullet_list = True
+            if in_numbered_list:
+                html_lines.append('</ol>')
+                in_numbered_list = False
+
+            # Remove bullet and convert to list item
+            content = re.sub(r'^[-*•]\s+', '', stripped)
+            html_lines.append(f'<li>{content}</li>')
+
+        # Detect numbered lists
+        elif re.match(r'^\d+\.\s+', stripped):
+            if not in_numbered_list:
+                html_lines.append('<ol>')
+                in_numbered_list = True
+            if in_bullet_list:
+                html_lines.append('</ul>')
+                in_bullet_list = False
+
+            # Remove number and convert to list item
+            content = re.sub(r'^\d+\.\s+', '', stripped)
+            html_lines.append(f'<li>{content}</li>')
+
+        # Regular line
+        else:
+            # Close any open lists
+            if in_bullet_list:
+                html_lines.append('</ul>')
+                in_bullet_list = False
+            if in_numbered_list:
+                html_lines.append('</ol>')
+                in_numbered_list = False
+
+            # Preserve leading spaces as indentation
+            leading_spaces = len(line) - len(line.lstrip())
+            indent = '&nbsp;' * leading_spaces
+
+            # Convert bold (**text**) to <strong>
+            content = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', stripped)
+
+            # Convert italic (*text* but not **) to <em>
+            content = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<em>\1</em>', content)
+
+            if content:
+                html_lines.append(f'{indent}{content}')
+            else:
+                html_lines.append('')
+
+    # Close any remaining open lists
+    if in_bullet_list:
+        html_lines.append('</ul>')
+    if in_numbered_list:
+        html_lines.append('</ol>')
+
+    # Join with <br> tags
+    return '<br>'.join(html_lines)
+
+
 def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key, deal_id=None):
     """
     Log a note to a HubSpot contact and/or deal
@@ -312,9 +404,9 @@ def log_hubspot_note(contact_id, summary_html, full_notes_html, api_key, deal_id
             'Content-Type': 'application/json'
         }
 
-        # Convert newlines to <br> tags
-        summary_formatted = summary_html.replace('\n', '<br>')
-        full_notes_formatted = full_notes_html.replace('\n', '<br>')
+        # Convert text to HTML with better formatting preservation
+        summary_formatted = convert_text_to_html(summary_html)
+        full_notes_formatted = convert_text_to_html(full_notes_html)
 
         # Format the note body
         note_body = f"<strong>Summary:</strong><br>{summary_formatted}<br><br><strong>Full Notes:</strong><br>{full_notes_formatted}"

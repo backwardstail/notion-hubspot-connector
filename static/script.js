@@ -556,20 +556,55 @@ function displayPreferences(preview) {
         return;
     }
 
-    if (notionInvestor && notionInvestor.found) {
+    if (notionInvestor && notionInvestor.status === 'found_single') {
         // Investor found in Notion
-        investorPageId = notionInvestor.page_id;
+        investorPageId = notionInvestor.id;
 
         // Get investor name from notion_investor data or parsed_contact company_name
         const investorName = notionInvestor.name || preview.parsed_contact?.company_name || 'Unknown Investor';
 
-        // Clear any old content and rebuild fresh
+        // Clear any old content and rebuild fresh with checkboxes
+        let preferencesHTML = '<div class="investor-preferences-grid">';
+
+        // Create checkbox for each preference field
+        const preferenceFields = Object.keys(preferences).filter(key => {
+            const value = preferences[key];
+            if (key === 'Preference Notes') {
+                return value && value.trim().length > 0;
+            }
+            return Array.isArray(value) && value.length > 0;
+        });
+
+        if (preferenceFields.length > 0) {
+            preferenceFields.forEach(field => {
+                const value = preferences[field];
+                const displayValue = Array.isArray(value) ? value.join(', ') : value;
+                preferencesHTML += `
+                    <div class="preference-checkbox-item">
+                        <label class="preference-checkbox-label">
+                            <input type="checkbox" class="preference-checkbox" data-field="${field}" checked>
+                            <div class="preference-content">
+                                <strong>${field}:</strong>
+                                <span class="preference-value">${displayValue}</span>
+                            </div>
+                        </label>
+                    </div>
+                `;
+            });
+        } else {
+            preferencesHTML += '<p class="info-text-small">No preferences parsed from notes.</p>';
+        }
+
+        preferencesHTML += '</div>';
+
         investorFound.innerHTML = `
             <div class="contact-info">
                 <p><strong>Investor:</strong> <span style="font-size: 1.1rem; color: #2563eb;">${investorName}</span></p>
             </div>
-            <p class="info-text-small" style="margin-top: 15px;">The following preferences will be updated in Notion:</p>
-            <pre id="preferences-json" class="json-preview"></pre>
+            <p class="info-text-small" style="margin-top: 15px; margin-bottom: 10px;">
+                <strong>Select preferences to append to Notion (unchecked items will be ignored):</strong>
+            </p>
+            ${preferencesHTML}
             <div class="contact-options-bottom">
                 <button id="search-different-investor-btn" class="btn-link">Search for a different investor</button>
             </div>
@@ -578,8 +613,21 @@ function displayPreferences(preview) {
         // Re-attach event listener since we rebuilt the HTML
         document.getElementById('search-different-investor-btn').addEventListener('click', showSearchDifferentInvestor);
 
-        document.getElementById('preferences-json').textContent = JSON.stringify(preferences, null, 2);
         investorFound.classList.remove('hidden');
+    } else if (notionInvestor && notionInvestor.status === 'found_multiple') {
+        // Multiple investors found - show dropdown
+        const investors = notionInvestor.investors || [];
+
+        // Clear and populate the investor dropdown
+        investorSelect.innerHTML = '<option value="">Select an investor...</option>';
+        investors.forEach(inv => {
+            const option = document.createElement('option');
+            option.value = inv.id;
+            option.textContent = inv.name;
+            investorSelect.appendChild(option);
+        });
+
+        multipleInvestorsDiv.classList.remove('hidden');
     } else {
         // Investor not found - show options
         investorNotFound.classList.remove('hidden');
@@ -1127,7 +1175,42 @@ async function handleSearchInvestor() {
             document.getElementById('search-different-investor-btn').addEventListener('click', showSearchDifferentInvestor);
 
             // NOW update preferences display with current data
-            document.getElementById('preferences-json').textContent = JSON.stringify(processedData?.preferences || {}, null, 2);
+            const preferencesContainer = document.getElementById('preferences-json');
+            if (preferencesContainer) {
+                const preferences = processedData?.preferences || {};
+                let preferencesHTML = '<div class="investor-preferences-grid">';
+
+                const preferenceFields = Object.keys(preferences).filter(key => {
+                    const value = preferences[key];
+                    if (key === 'Preference Notes') {
+                        return value && value.trim().length > 0;
+                    }
+                    return Array.isArray(value) && value.length > 0;
+                });
+
+                if (preferenceFields.length > 0) {
+                    preferenceFields.forEach(field => {
+                        const value = preferences[field];
+                        const displayValue = Array.isArray(value) ? value.join(', ') : value;
+                        preferencesHTML += `
+                            <div class="preference-checkbox-item">
+                                <label class="preference-checkbox-label">
+                                    <input type="checkbox" class="preference-checkbox" data-field="${field}" checked>
+                                    <div class="preference-content">
+                                        <strong>${field}:</strong>
+                                        <span class="preference-value">${displayValue}</span>
+                                    </div>
+                                </label>
+                            </div>
+                        `;
+                    });
+                } else {
+                    preferencesHTML += '<p class="info-text-small">No preferences parsed from notes.</p>';
+                }
+
+                preferencesHTML += '</div>';
+                preferencesContainer.innerHTML = preferencesHTML;
+            }
 
             // Show investor-found section
             investorFound.classList.remove('hidden');
@@ -1274,9 +1357,40 @@ async function handleCreateInvestor() {
     const manualCompanyNameInput = document.getElementById('manual-company-name');
     manualCompanyNameInput.value = companyName || '';
 
-    // Display preferences
+    // Display preferences with checkboxes
     const newInvestorPrefs = document.getElementById('new-investor-prefs');
-    newInvestorPrefs.textContent = JSON.stringify(preferences || {}, null, 2);
+    let preferencesHTML = '<div class="investor-preferences-grid">';
+
+    const preferenceFields = Object.keys(preferences).filter(key => {
+        const value = preferences[key];
+        if (key === 'Preference Notes') {
+            return value && value.trim().length > 0;
+        }
+        return Array.isArray(value) && value.length > 0;
+    });
+
+    if (preferenceFields.length > 0) {
+        preferenceFields.forEach(field => {
+            const value = preferences[field];
+            const displayValue = Array.isArray(value) ? value.join(', ') : value;
+            preferencesHTML += `
+                <div class="preference-checkbox-item">
+                    <label class="preference-checkbox-label">
+                        <input type="checkbox" class="preference-checkbox" data-field="${field}" checked>
+                        <div class="preference-content">
+                            <strong>${field}:</strong>
+                            <span class="preference-value">${displayValue}</span>
+                        </div>
+                    </label>
+                </div>
+            `;
+        });
+    } else {
+        preferencesHTML += '<p class="info-text-small">No preferences parsed from notes.</p>';
+    }
+
+    preferencesHTML += '</div>';
+    newInvestorPrefs.innerHTML = preferencesHTML;
 
     updateExecutionSummary();
 }
@@ -1312,11 +1426,42 @@ function handleConfirmInvestorCreate() {
 
     investorFound.insertBefore(createIndicator, investorFound.firstChild);
 
-    // Display the preferences in the main section (get fresh reference in case DOM was rebuilt)
-    const preferences = processedData?.preferences;
+    // Display the preferences in the main section with checkboxes (get fresh reference in case DOM was rebuilt)
+    const preferences = processedData?.preferences || {};
     const preferencesJsonElement = document.getElementById('preferences-json');
     if (preferencesJsonElement) {
-        preferencesJsonElement.textContent = JSON.stringify(preferences || {}, null, 2);
+        let preferencesHTML = '<div class="investor-preferences-grid">';
+
+        const preferenceFields = Object.keys(preferences).filter(key => {
+            const value = preferences[key];
+            if (key === 'Preference Notes') {
+                return value && value.trim().length > 0;
+            }
+            return Array.isArray(value) && value.length > 0;
+        });
+
+        if (preferenceFields.length > 0) {
+            preferenceFields.forEach(field => {
+                const value = preferences[field];
+                const displayValue = Array.isArray(value) ? value.join(', ') : value;
+                preferencesHTML += `
+                    <div class="preference-checkbox-item">
+                        <label class="preference-checkbox-label">
+                            <input type="checkbox" class="preference-checkbox" data-field="${field}" checked>
+                            <div class="preference-content">
+                                <strong>${field}:</strong>
+                                <span class="preference-value">${displayValue}</span>
+                            </div>
+                        </label>
+                    </div>
+                `;
+            });
+        } else {
+            preferencesHTML += '<p class="info-text-small">No preferences parsed from notes.</p>';
+        }
+
+        preferencesHTML += '</div>';
+        preferencesJsonElement.innerHTML = preferencesHTML;
     }
 
     updateExecutionSummary();
@@ -1651,28 +1796,41 @@ function renderSelectedDeals() {
                 <button class="btn-remove-deal" data-deal-id="${deal.id}" title="Remove deal">✕</button>
             </div>
             <div class="deal-card-info">
-                <span class="deal-info-label">Stage:</span>
-                <span>${getDealStageDisplayName(deal.stage) || 'Unknown'}</span>
-            </div>
-            <div class="deal-card-info">
                 <span class="deal-info-label">Amount:</span>
                 <span>$${deal.amount ? parseFloat(deal.amount).toLocaleString() : '0'}</span>
             </div>
             <div class="deal-update-fields">
                 <div class="form-group">
-                    <label>Update Next Step:</label>
+                    <label>Deal Stage:</label>
+                    <select class="deal-field-input"
+                            data-deal-index="${index}"
+                            data-field="dealstage">
+                        <option value="">Select a stage...</option>
+                        <option value="appointmentscheduled" ${deal.stage === 'appointmentscheduled' ? 'selected' : ''}>1. New Lead (Sales Pipeline)</option>
+                        <option value="qualifiedtobuy" ${deal.stage === 'qualifiedtobuy' ? 'selected' : ''}>2. Reviewing Teaser / Executing NDA (Sales Pipeline)</option>
+                        <option value="presentationscheduled" ${deal.stage === 'presentationscheduled' ? 'selected' : ''}>3. Reviewing Data / NDA Signed (Sales Pipeline)</option>
+                        <option value="decisionmakerboughtin" ${deal.stage === 'decisionmakerboughtin' ? 'selected' : ''}>4. IOI Issued / Deep Dive Analysis (Sales Pipeline)</option>
+                        <option value="contractsent" ${deal.stage === 'contractsent' ? 'selected' : ''}>5. LOI Issued (Sales Pipeline)</option>
+                        <option value="1110891580" ${deal.stage === '1110891580' ? 'selected' : ''}>6. LOI Signed (Sales Pipeline)</option>
+                        <option value="closedwon" ${deal.stage === 'closedwon' ? 'selected' : ''}>7. Closed Won (Sales Pipeline)</option>
+                        <option value="closedlost" ${deal.stage === 'closedlost' ? 'selected' : ''}>8. Closed Lost (Sales Pipeline)</option>
+                        <option value="1173780286" ${deal.stage === '1173780286' ? 'selected' : ''}>9. Closed Declined (Sales Pipeline)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Next Step:</label>
                     <input type="text" class="deal-field-input"
                            data-deal-index="${index}"
                            data-field="hs_next_step"
                            placeholder="${deal.next_step || 'Enter next step...'}"
-                           value="">
+                           value="${deal.next_step || ''}">
                 </div>
                 <div class="form-group">
-                    <label>Update Next Step Date:</label>
+                    <label>Next Step Date:</label>
                     <input type="date" class="deal-field-input"
                            data-deal-index="${index}"
                            data-field="next_steps_date"
-                           value="">
+                           value="${deal.next_step_date || ''}">
                 </div>
             </div>
         `;
@@ -1701,8 +1859,27 @@ function handleDealFieldUpdate(e) {
     const value = input.value;
 
     if (selectedDeals[dealIndex]) {
-        selectedDeals[dealIndex].updates[field] = value;
-        console.log(`Updated deal ${selectedDeals[dealIndex].id} field ${field}:`, value);
+        const deal = selectedDeals[dealIndex];
+
+        // Determine the original value based on field
+        let originalValue = '';
+        if (field === 'dealstage') {
+            originalValue = deal.stage || '';
+        } else if (field === 'hs_next_step') {
+            originalValue = deal.next_step || '';
+        } else if (field === 'next_steps_date') {
+            originalValue = deal.next_step_date || '';
+        }
+
+        // Only add to updates if value has changed from original
+        if (value && value !== originalValue) {
+            selectedDeals[dealIndex].updates[field] = value;
+            console.log(`Updated deal ${deal.id} field ${field}:`, value);
+        } else {
+            // Remove from updates if value matches original or is empty
+            delete selectedDeals[dealIndex].updates[field];
+            console.log(`Reverted deal ${deal.id} field ${field} to original`);
+        }
     }
 }
 
@@ -2122,6 +2299,18 @@ async function handleConfirmAndExecute() {
         // Get only selected todos with custom dates
         const todosToSend = shouldCreateTodos ? getSelectedTodos() : [];
 
+        // Get only selected preferences
+        const selectedPreferences = {};
+        if (shouldUpdateInvestorPrefs && !skipInvestorPrefs && processedData.preferences) {
+            const preferenceCheckboxes = document.querySelectorAll('.preference-checkbox:checked');
+            preferenceCheckboxes.forEach(checkbox => {
+                const field = checkbox.dataset.field;
+                if (processedData.preferences[field]) {
+                    selectedPreferences[field] = processedData.preferences[field];
+                }
+            });
+        }
+
         // Initialize and show execution loading screen
         initializeProgressSteps(hubspotAction, shouldUpdateInvestorPrefs && !skipInvestorPrefs, shouldCreateTodos && todosToSend.length > 0);
         showExecutionLoading();
@@ -2132,6 +2321,7 @@ async function handleConfirmAndExecute() {
             deal_id: deal.id,
             deal_name: deal.name,
             updates: {
+                ...(deal.updates.dealstage && { dealstage: deal.updates.dealstage }),
                 ...(deal.updates.hs_next_step && { hs_next_step: deal.updates.hs_next_step }),
                 ...(deal.updates.next_steps_date && { next_steps_date: deal.updates.next_steps_date })
             }
@@ -2167,7 +2357,7 @@ async function handleConfirmAndExecute() {
                 update_investor_prefs: shouldUpdateInvestorPrefs && !skipInvestorPrefs,
                 create_todos: shouldCreateTodos,
                 company_name: companyName,
-                preferences: processedData.preferences || {},
+                preferences: selectedPreferences,
                 todos: todosToSend
             },
             contact_name: selectedContactName || ''  // For backward compatibility
@@ -2366,6 +2556,9 @@ function handleNewNotes() {
 
     // Clear input
     notesInput.value = '';
+
+    // Clear localStorage to prevent field prepopulation
+    localStorage.clear();
 
     // Reset checkboxes
     if (updateInvestorPrefsCheckbox) updateInvestorPrefsCheckbox.checked = true;

@@ -1637,29 +1637,53 @@ def send_daily_deal_reminders(
         Dict: Result with success status and details
     """
     try:
+        import time
+        start_time = time.time()
         logger.info("=== Starting daily reminder check ===")
         from datetime import timedelta
         tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
 
         # Step 1: Fetch all deals with next steps
+        logger.info("Step 1: Fetching all deals with next steps from HubSpot...")
+        step_start = time.time()
         all_deals = get_all_deals_with_next_steps(hubspot_api_key)
+        logger.info(f"  ✓ Fetched {len(all_deals) if all_deals else 0} deals in {time.time() - step_start:.2f}s")
+
         deals_due_tomorrow = filter_deals_due_on_date(all_deals, tomorrow) if all_deals else []
+        logger.info(f"  → {len(deals_due_tomorrow)} deals due tomorrow")
 
         # Step 2: Fetch HubSpot tasks due tomorrow
+        logger.info("Step 2: Fetching HubSpot tasks due tomorrow...")
+        step_start = time.time()
         tasks_due_tomorrow = get_hubspot_tasks_due_on_date(hubspot_api_key, tomorrow, hubspot_portal_id)
+        logger.info(f"  ✓ Fetched {len(tasks_due_tomorrow)} tasks in {time.time() - step_start:.2f}s")
 
         # Step 3: Fetch Notion to-dos due tomorrow (if configured)
         todos_due_tomorrow = []
         if notion_api_key and notion_todos_db_id:
+            logger.info("Step 3: Fetching Notion to-dos due tomorrow...")
+            step_start = time.time()
             todos_due_tomorrow = get_notion_todos_due_on_date(notion_api_key, notion_todos_db_id, tomorrow)
+            logger.info(f"  ✓ Fetched {len(todos_due_tomorrow)} to-dos in {time.time() - step_start:.2f}s")
+        else:
+            logger.info("Step 3: Skipping Notion to-dos (not configured)")
 
         # Step 4: Fetch all overdue items
-        logger.info("Fetching overdue items...")
+        logger.info("Step 4: Fetching overdue items...")
+        step_start = time.time()
+
         overdue_deals_list = filter_overdue_deals(all_deals) if all_deals else []
+        logger.info(f"  → {len(overdue_deals_list)} overdue deals")
+
         overdue_tasks_list = get_overdue_hubspot_tasks(hubspot_api_key, hubspot_portal_id)
+        logger.info(f"  → {len(overdue_tasks_list)} overdue tasks")
+
         overdue_todos_list = []
         if notion_api_key and notion_todos_db_id:
             overdue_todos_list = get_overdue_notion_todos(notion_api_key, notion_todos_db_id)
+            logger.info(f"  → {len(overdue_todos_list)} overdue to-dos")
+
+        logger.info(f"  ✓ Fetched all overdue items in {time.time() - step_start:.2f}s")
 
         # Check if we have anything to send (tomorrow + overdue)
         total_tomorrow = len(deals_due_tomorrow) + len(tasks_due_tomorrow) + len(todos_due_tomorrow)
@@ -1681,6 +1705,8 @@ def send_daily_deal_reminders(
             }
 
         # Step 5: Get contacts and format each deal due tomorrow
+        logger.info(f"Step 5: Formatting {len(deals_due_tomorrow)} deals due tomorrow...")
+        step_start = time.time()
         deals_data = []
         for deal in deals_due_tomorrow:
             deal_id = deal.get('id')
@@ -1703,7 +1729,11 @@ def send_daily_deal_reminders(
             )
             deals_data.append(deal_data)
 
+        logger.info(f"  ✓ Formatted deals in {time.time() - step_start:.2f}s")
+
         # Step 6: Format overdue deals
+        logger.info(f"Step 6: Formatting {len(overdue_deals_list)} overdue deals...")
+        step_start = time.time()
         overdue_deals_data = []
         for deal in overdue_deals_list:
             deal_id = deal.get('id')
@@ -1726,7 +1756,11 @@ def send_daily_deal_reminders(
             )
             overdue_deals_data.append(deal_data)
 
+        logger.info(f"  ✓ Formatted overdue deals in {time.time() - step_start:.2f}s")
+
         # Step 7: Build email HTML with both tomorrow and overdue items
+        logger.info("Step 7: Building email HTML...")
+        step_start = time.time()
         html_body = build_email_html(
             deals_data,
             tasks_due_tomorrow,
@@ -1737,8 +1771,11 @@ def send_daily_deal_reminders(
             hubspot_portal_id,
             notion_todos_db_id
         )
+        logger.info(f"  ✓ Built email HTML in {time.time() - step_start:.2f}s")
 
         # Step 8: Send email
+        logger.info("Step 8: Sending email...")
+        step_start = time.time()
         tomorrow_formatted = tomorrow.strftime('%B %d, %Y')
 
         # Build subject line
@@ -1778,9 +1815,13 @@ def send_daily_deal_reminders(
             smtp_password=smtp_password,
             from_email=from_email
         )
+        logger.info(f"  ✓ Email sent in {time.time() - step_start:.2f}s")
+
+        total_elapsed = time.time() - start_time
+        logger.info(f"=== Daily reminder check completed in {total_elapsed:.2f}s ===")
 
         if email_sent:
-            logger.info(f"Daily reminder sent: {len(deals_data)} deal(s) tomorrow, {len(tasks_due_tomorrow)} task(s) tomorrow, {len(todos_due_tomorrow)} to-do(s) tomorrow")
+            logger.info(f"✓ Daily reminder sent: {len(deals_data)} deal(s) tomorrow, {len(tasks_due_tomorrow)} task(s) tomorrow, {len(todos_due_tomorrow)} to-do(s) tomorrow")
             logger.info(f"  Overdue: {len(overdue_deals_data)} deal(s), {len(overdue_tasks_list)} task(s), {len(overdue_todos_list)} to-do(s)")
             return {
                 'success': True,
