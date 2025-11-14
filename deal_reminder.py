@@ -1606,17 +1606,68 @@ def send_email_smtp(
         return False
 
 
+def send_email_resend(
+    to_email: str,
+    subject: str,
+    html_body: str,
+    from_email: str,
+    resend_api_key: str
+) -> bool:
+    """
+    Send email using Resend API (recommended for Render deployments)
+
+    Args:
+        to_email (str): Recipient email
+        subject (str): Email subject
+        html_body (str): HTML email body
+        from_email (str): Sender email (must be verified in Resend)
+        resend_api_key (str): Resend API key
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        logger.info(f"Sending email via Resend API to {to_email}")
+
+        url = "https://api.resend.com/emails"
+        headers = {
+            "Authorization": f"Bearer {resend_api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "from": from_email,
+            "to": [to_email],
+            "subject": subject,
+            "html": html_body
+        }
+
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+
+        if response.status_code == 200:
+            logger.info(f"Email sent successfully via Resend to {to_email}")
+            return True
+        else:
+            logger.error(f"Resend API error: {response.status_code} - {response.text}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Failed to send email via Resend: {str(e)}", exc_info=True)
+        return False
+
+
 def send_daily_deal_reminders(
     hubspot_api_key: str,
     hubspot_portal_id: str,
     to_email: str,
-    smtp_server: str,
-    smtp_port: int,
-    smtp_username: str,
-    smtp_password: str,
     from_email: str,
     notion_api_key: str = None,
-    notion_todos_db_id: str = None
+    notion_todos_db_id: str = None,
+    resend_api_key: str = None,
+    smtp_server: str = None,
+    smtp_port: int = 587,
+    smtp_username: str = None,
+    smtp_password: str = None
 ) -> Dict:
     """
     Main function to check deals and send daily reminder email
@@ -1805,17 +1856,45 @@ def send_daily_deal_reminders(
 
         subject = f"📅 Daily Reminder for {tomorrow_formatted} - {' | '.join(subject_parts)}"
 
-        email_sent = send_email_smtp(
-            to_email=to_email,
-            subject=subject,
-            html_body=html_body,
-            smtp_server=smtp_server,
-            smtp_port=smtp_port,
-            smtp_username=smtp_username,
-            smtp_password=smtp_password,
-            from_email=from_email
-        )
-        logger.info(f"  ✓ Email sent in {time.time() - step_start:.2f}s")
+        # Try Resend first (recommended), fallback to SMTP
+        email_sent = False
+        if resend_api_key:
+            logger.info("Using Resend API to send email")
+            email_sent = send_email_resend(
+                to_email=to_email,
+                subject=subject,
+                html_body=html_body,
+                from_email=from_email,
+                resend_api_key=resend_api_key
+            )
+        elif smtp_server and smtp_username and smtp_password:
+            logger.info("Using SMTP to send email")
+            email_sent = send_email_smtp(
+                to_email=to_email,
+                subject=subject,
+                html_body=html_body,
+                smtp_server=smtp_server,
+                smtp_port=smtp_port,
+                smtp_username=smtp_username,
+                smtp_password=smtp_password,
+                from_email=from_email
+            )
+        else:
+            logger.error("No email service configured (neither Resend nor SMTP)")
+            return {
+                'success': False,
+                'message': 'No email service configured',
+                'deals_found': len(deals_data),
+                'tasks_found': len(tasks_due_tomorrow),
+                'todos_found': len(todos_due_tomorrow),
+                'overdue_deals_found': len(overdue_deals_data),
+                'overdue_tasks_found': len(overdue_tasks_list),
+                'overdue_todos_found': len(overdue_todos_list),
+                'email_sent': False,
+                'error': 'No email service configured'
+            }
+
+        logger.info(f"  ✓ Email sending attempted in {time.time() - step_start:.2f}s")
 
         total_elapsed = time.time() - start_time
         logger.info(f"=== Daily reminder check completed in {total_elapsed:.2f}s ===")
