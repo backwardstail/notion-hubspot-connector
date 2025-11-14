@@ -44,6 +44,7 @@ SERPER_API_KEY = os.getenv('SERPER_API_KEY')  # Optional: For web search functio
 # Email reminder configuration
 REMINDER_EMAIL_TO = os.getenv('REMINDER_EMAIL_TO')
 REMINDER_EMAIL_FROM = os.getenv('REMINDER_EMAIL_FROM')
+RESEND_API_KEY = os.getenv('RESEND_API_KEY')
 SMTP_SERVER = os.getenv('SMTP_SERVER')
 SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
 SMTP_USERNAME = os.getenv('SMTP_USERNAME')
@@ -69,9 +70,17 @@ def run_daily_reminder_job():
             logger.info("Deal reminders are disabled (REMINDER_ENABLED=false)")
             return
 
-        if not all([HUBSPOT_API_KEY, HUBSPOT_PORTAL_ID, REMINDER_EMAIL_TO,
-                    SMTP_SERVER, SMTP_USERNAME, SMTP_PASSWORD, REMINDER_EMAIL_FROM]):
+        # Check required config
+        if not all([HUBSPOT_API_KEY, HUBSPOT_PORTAL_ID, REMINDER_EMAIL_TO, REMINDER_EMAIL_FROM]):
             logger.warning("Deal reminder config incomplete - skipping reminder")
+            return
+
+        # Check that either Resend or SMTP is configured
+        has_resend = RESEND_API_KEY is not None and len(RESEND_API_KEY) > 0
+        has_smtp = all([SMTP_SERVER, SMTP_USERNAME, SMTP_PASSWORD])
+
+        if not has_resend and not has_smtp:
+            logger.warning("No email service configured (neither Resend nor SMTP) - skipping reminder")
             return
 
         logger.info(f"Config check passed - elapsed: {time.time() - start_time:.2f}s")
@@ -82,13 +91,14 @@ def run_daily_reminder_job():
             hubspot_api_key=HUBSPOT_API_KEY,
             hubspot_portal_id=HUBSPOT_PORTAL_ID,
             to_email=REMINDER_EMAIL_TO,
+            from_email=REMINDER_EMAIL_FROM,
+            notion_api_key=NOTION_API_KEY,
+            notion_todos_db_id=NOTION_TODOS_DB_ID,
+            resend_api_key=RESEND_API_KEY,
             smtp_server=SMTP_SERVER,
             smtp_port=SMTP_PORT,
             smtp_username=SMTP_USERNAME,
-            smtp_password=SMTP_PASSWORD,
-            from_email=REMINDER_EMAIL_FROM,
-            notion_api_key=NOTION_API_KEY,
-            notion_todos_db_id=NOTION_TODOS_DB_ID
+            smtp_password=SMTP_PASSWORD
         )
 
         elapsed = time.time() - start_time
