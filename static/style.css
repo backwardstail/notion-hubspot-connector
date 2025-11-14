@@ -797,6 +797,60 @@ textarea:focus {
     margin-top: 10px;
 }
 
+/* Investor Preferences Grid with Checkboxes */
+.investor-preferences-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 15px 0;
+}
+
+.preference-checkbox-item {
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #f9fafb;
+    transition: all 0.2s;
+}
+
+.preference-checkbox-item:hover {
+    background: #f3f4f6;
+    border-color: #0078d4;
+}
+
+.preference-checkbox-label {
+    display: flex;
+    align-items: start;
+    padding: 12px;
+    cursor: pointer;
+    gap: 10px;
+}
+
+.preference-checkbox-label input[type="checkbox"] {
+    margin-top: 3px;
+    cursor: pointer;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+.preference-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.preference-content strong {
+    color: #1e40af;
+    font-size: 0.95rem;
+}
+
+.preference-value {
+    color: #4b5563;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
 /* Footer */
 footer {
     text-align: center;

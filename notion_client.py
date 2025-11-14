@@ -377,7 +377,7 @@ def create_investor_page(company_name, properties, database_id, api_key):
                 page_properties[prop_name] = prop_value
 
         payload = {
-            'parent': {'type': 'data_source_id', 'data_source_id': database_id},
+            'parent': {'type': 'database_id', 'database_id': database_id},
             'properties': page_properties
         }
 
@@ -473,7 +473,7 @@ def create_todo_item(task_name, due_date, next_step, database_id, api_key):
             }
 
         payload = {
-            'parent': {'type': 'data_source_id', 'data_source_id': database_id},
+            'parent': {'type': 'database_id', 'database_id': database_id},
             'properties': page_properties
         }
 

@@ -56,7 +56,12 @@ def run_daily_reminder_job():
     """
     Scheduled job to send daily deal reminders
     """
+    import time
+    start_time = time.time()
+    logger.info("=" * 80)
     logger.info("Running scheduled daily deal reminder job")
+    logger.info(f"Start time: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+    logger.info("=" * 80)
 
     try:
         # Check if reminder is enabled and all required config is present
@@ -69,7 +74,10 @@ def run_daily_reminder_job():
             logger.warning("Deal reminder config incomplete - skipping reminder")
             return
 
+        logger.info(f"Config check passed - elapsed: {time.time() - start_time:.2f}s")
+
         # Send reminders
+        logger.info("Calling send_daily_deal_reminders...")
         result = send_daily_deal_reminders(
             hubspot_api_key=HUBSPOT_API_KEY,
             hubspot_portal_id=HUBSPOT_PORTAL_ID,
@@ -83,13 +91,29 @@ def run_daily_reminder_job():
             notion_todos_db_id=NOTION_TODOS_DB_ID
         )
 
+        elapsed = time.time() - start_time
+        logger.info(f"send_daily_deal_reminders completed - elapsed: {elapsed:.2f}s")
+
         if result['success']:
-            logger.info(f"Daily reminder completed: {result['message']}")
+            logger.info(f"✓ Daily reminder completed: {result['message']}")
+            logger.info(f"  - Deals due: {result.get('deals_found', 0)}")
+            logger.info(f"  - Tasks due: {result.get('tasks_found', 0)}")
+            logger.info(f"  - Todos due: {result.get('todos_found', 0)}")
+            logger.info(f"  - Overdue deals: {result.get('overdue_deals_found', 0)}")
+            logger.info(f"  - Overdue tasks: {result.get('overdue_tasks_found', 0)}")
+            logger.info(f"  - Overdue todos: {result.get('overdue_todos_found', 0)}")
+            logger.info(f"  - Email sent: {result.get('email_sent', False)}")
         else:
-            logger.error(f"Daily reminder failed: {result.get('error', 'Unknown error')}")
+            logger.error(f"✗ Daily reminder failed: {result.get('error', 'Unknown error')}")
+
+        logger.info("=" * 80)
+        logger.info(f"Total execution time: {elapsed:.2f}s")
+        logger.info("=" * 80)
 
     except Exception as e:
-        logger.error(f"Error in daily reminder job: {str(e)}", exc_info=True)
+        elapsed = time.time() - start_time
+        logger.error(f"✗ Error in daily reminder job after {elapsed:.2f}s: {str(e)}", exc_info=True)
+        logger.error("=" * 80)
 
 
 @app.route('/')
@@ -105,12 +129,53 @@ def health():
     This endpoint is used to keep the Render instance awake and ensure
     the background scheduler is running.
     """
-    scheduler_status = "running" if scheduler.running else "stopped"
+    try:
+        scheduler_status = "running" if scheduler.running else "stopped"
+    except:
+        scheduler_status = "not_initialized"
+
     return jsonify({
         'status': 'ok',
         'scheduler': scheduler_status,
         'reminder_enabled': REMINDER_ENABLED
     }), 200
+
+
+@app.route('/api/trigger-reminder', methods=['POST'])
+def trigger_reminder():
+    """
+    Manually trigger the daily reminder job for testing/debugging.
+    This runs synchronously and returns the result.
+    """
+    import time
+    start_time = time.time()
+
+    try:
+        logger.info("Manual reminder trigger requested")
+
+        # Check authentication (optional - add a secret token in production)
+        # auth_token = request.headers.get('X-Auth-Token')
+        # if auth_token != os.getenv('TRIGGER_SECRET'):
+        #     return jsonify({'error': 'Unauthorized'}), 401
+
+        # Run the reminder job
+        run_daily_reminder_job()
+
+        elapsed = time.time() - start_time
+        return jsonify({
+            'success': True,
+            'message': 'Reminder job completed',
+            'execution_time': f"{elapsed:.2f}s"
+        }), 200
+
+    except Exception as e:
+        elapsed = time.time() - start_time
+        logger.error(f"Error in manual reminder trigger: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'execution_time': f"{elapsed:.2f}s"
+        }), 500
 
 
 @app.route('/api/process-notes', methods=['POST'])
@@ -220,6 +285,62 @@ def process_notes():
                     deal_search_status = 'not_found'
                     logger.info(f"No deals found for '{search_term}'")
 
+        # STEP 2.75: Search Notion for investor if company name was parsed
+        notion_investor = None
+        investor_search_status = 'not_searched'
+
+        # Search for investor if we have a company name and preferences were parsed
+        if contact_info.get('company_name') and preferences:
+            company_name = contact_info['company_name']
+            logger.info(f"Searching Notion for investor: {company_name}")
+
+            investor_result = search_investor_preferences(
+                company_name,
+                NOTION_INVESTOR_PREFS_DB_ID,
+                NOTION_API_KEY
+            )
+
+            if investor_result['success'] and investor_result['data']:
+                investors = investor_result['data']
+                if len(investors) == 1:
+                    investor = investors[0]
+                    investor_name = ''
+                    # Extract name from title property
+                    title_prop = investor.get('properties', {}).get('Investor Name', {})
+                    if title_prop.get('title'):
+                        investor_name = title_prop['title'][0].get('plain_text', '')
+
+                    notion_investor = {
+                        'status': 'found_single',
+                        'id': investor['id'],
+                        'name': investor_name or company_name
+                    }
+                    investor_search_status = 'found_single'
+                    logger.info(f"Found investor in Notion: {investor_name}")
+                elif len(investors) > 1:
+                    # Extract names for all investors
+                    investors_with_names = []
+                    for inv in investors:
+                        title_prop = inv.get('properties', {}).get('Investor Name', {})
+                        inv_name = ''
+                        if title_prop.get('title'):
+                            inv_name = title_prop['title'][0].get('plain_text', '')
+                        investors_with_names.append({
+                            'id': inv['id'],
+                            'name': inv_name or 'Unknown'
+                        })
+
+                    notion_investor = {
+                        'status': 'found_multiple',
+                        'investors': investors_with_names
+                    }
+                    investor_search_status = 'found_multiple'
+                    logger.info(f"Found {len(investors)} investors matching '{company_name}'")
+            else:
+                notion_investor = {'status': 'not_found'}
+                investor_search_status = 'not_found'
+                logger.info(f"No investor found in Notion for: {company_name}")
+
         # STEP 3: Build preview response
         preview_data = {
             'raw_notes': notes,
@@ -229,6 +350,8 @@ def process_notes():
             'contact_status': contact_search_status,
             'hubspot_deals': hubspot_deals,
             'deal_status': deal_search_status,
+            'notion_investor': notion_investor,
+            'investor_status': investor_search_status,
             'summary': summary,
             'preferences': preferences,
             'todos': todos,
